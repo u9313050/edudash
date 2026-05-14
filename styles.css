@@ -58,7 +58,8 @@ nav { display: grid; gap: 8px; }
 .mobile-menu-btn { display: none; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; box-shadow: 0 10px 35px rgba(30, 64, 175, .07); }
 .home-view { min-height: 100vh; display: grid; place-items: center; padding: 0; background: #f7fbff; overflow: hidden; }
-.home-view img { width: 100%; height: 100vh; object-fit: contain; display: block; }
+.home-view .home-desktop-art { width: 100%; height: 100vh; object-fit: contain; display: block; }
+.mobile-home { display: none; }
 .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
 .quiz-grid { grid-template-columns: 1fr 1fr minmax(240px, 2fr) 1fr 1fr; }
@@ -129,9 +130,23 @@ nav { display: grid; gap: 8px; }
   .app-shell.mobile-menu-collapsed .sidebar nav,
   .app-shell.mobile-menu-collapsed .sidebar #logout-btn { display: none; }
   .app-shell.mobile-menu-collapsed .workspace { padding-top: 18px; }
+  .app-shell.mobile-menu-collapsed .workspace.home-mode { padding-top: 0; }
   nav { grid-template-columns: repeat(4, 1fr); }
   .nav { text-align: center; padding: 10px 6px; }
   .form-grid, .grid, .api-box, .quiz-grid { grid-template-columns: 1fr 1fr; }
+  .workspace.home-mode { padding: 0; }
+  .home-view { min-height: calc(100vh - 75px); display: block; padding: 18px; background: linear-gradient(180deg, #eef6ff 0%, #f8fbff 100%); overflow: visible; }
+  .home-view .home-desktop-art { display: none; }
+  .mobile-home { min-height: calc(100vh - 112px); display: grid; align-content: start; gap: 14px; }
+  .mobile-home-hero { min-height: 250px; display: grid; align-content: end; padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(145deg, #ffffff 0%, #eef5ff 58%, #dff0ff 100%); box-shadow: 0 18px 45px rgba(37, 99, 235, .12); }
+  .mobile-home-mark { width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 28px; border-radius: 14px; background: var(--blue); color: white; font-weight: 900; box-shadow: 0 12px 28px rgba(37, 99, 235, .25); }
+  .mobile-home-hero h1 { margin: 0 0 10px; font-size: 40px; line-height: 1; color: #101827; }
+  .mobile-home-hero p:last-child { max-width: 280px; margin: 0; color: var(--muted); line-height: 1.55; font-weight: 700; }
+  .mobile-home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mobile-home-grid button { min-height: 92px; display: grid; align-content: space-between; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: white; color: var(--ink); text-align: left; box-shadow: 0 10px 25px rgba(37, 99, 235, .08); }
+  .mobile-home-grid button span { color: var(--blue-dark); font-size: 13px; font-weight: 800; }
+  .mobile-home-grid button strong { font-size: 18px; line-height: 1.2; }
+  .mobile-home-grid button:active { transform: translateY(1px); }
 }
 
 @media (max-width: 560px) {
@@ -143,4 +158,8 @@ nav { display: grid; gap: 8px; }
   .top-actions #top-logout-btn,
   .top-actions #reset-user-btn { display: none; }
   .form-grid, .grid, nav, .api-box, .quiz-grid { grid-template-columns: 1fr; }
+  .workspace.home-mode { padding: 0; }
+  .home-view { padding: 14px; }
+  .mobile-home-grid { grid-template-columns: 1fr 1fr; }
+  .mobile-home-hero { min-height: 270px; }
 }

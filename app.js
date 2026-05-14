@@ -3,8 +3,7 @@ const BANK_LIMIT = 100;
 const BANK_DB_NAME = "EduDashQuestionBank";
 const BANK_DB_VERSION = 1;
 const BANK_STORE = "chapterBanks";
-const BUILTIN_OPENAI_KEY = "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";
-const APP_BUILD = "2026-05-14-006";
+const APP_BUILD = "2026-05-14-009";
 const BANK_ADMIN_USER = "u9313050";
 const SUBJECT_FILES = ["db_korean.json", "db_math.json", "db_science.json"];
 const AUTO_BANK_FOLDER = "문제은행/";
@@ -18,6 +17,7 @@ let state = {
   view: "dashboard",
   quiz: null
 };
+let remoteUserCache = {};
 
 const koreanPassages = [
   "푸른 하늘 아래 운동장에는 아이들의 웃음소리가 퍼졌다.",
@@ -129,7 +129,7 @@ async function init() {
   await loadSubjects();
   bindEvents();
   const lastUser = localStorage.getItem(`${STORE}:session`);
-  if (lastUser && getUsers()[lastUser]) loginAs(lastUser);
+  if (lastUser) await restoreSession(lastUser);
 }
 
 function registerServiceWorker() {
@@ -290,6 +290,10 @@ function bindEvents() {
     collapseMobileMenu();
   });
   $("#mobile-menu-btn").addEventListener("click", toggleMobileMenu);
+  $$("#home-view [data-home-target]").forEach((button) => button.addEventListener("click", () => {
+    switchView(button.dataset.homeTarget);
+    collapseMobileMenu();
+  }));
   $$(".nav").forEach((button) => button.addEventListener("click", () => {
     switchView(button.dataset.view);
     collapseMobileMenu();
@@ -305,15 +309,51 @@ function bindEvents() {
   });
 }
 
-function authenticate(mode) {
+async function restoreSession(username) {
+  if (isServerStorageEnabled()) {
+    try {
+      const record = await serverGetUser(username);
+      if (!record) {
+        localStorage.removeItem(`${STORE}:session`);
+        localStorage.removeItem(`${STORE}:serverSession`);
+        return;
+      }
+      remoteUserCache[username] = normalizeUserData(record.data);
+      loginAs(username);
+      return;
+    } catch {
+      showAuth("서버 사용자 정보를 불러오지 못했습니다. 다시 로그인하세요.");
+      localStorage.removeItem(`${STORE}:session`);
+      localStorage.removeItem(`${STORE}:serverSession`);
+      return;
+    }
+  }
+  if (getUsers()[username]) loginAs(username);
+}
+
+async function authenticate(mode) {
   const username = $("#username").value.trim();
   const password = $("#password").value;
-  const users = getUsers();
   if (!username || password.length < 4) return showAuth("사용자 이름과 4자 이상 비밀번호를 입력하세요.");
 
+  if (isServerStorageEnabled()) {
+    showAuth("서버 확인 중입니다.");
+    try {
+      const user = mode === "signup"
+        ? await serverCreateUser(username, password)
+        : await serverValidateUser(username, password);
+      remoteUserCache[username] = normalizeUserData(user);
+      loginAs(username);
+    } catch (error) {
+      showAuth(error.message || "서버 로그인 처리에 실패했습니다.");
+    }
+    return;
+  }
+
+  const users = getUsers();
   if (mode === "signup") {
     if (users[username]) return showAuth("이미 가입된 사용자입니다.");
-    users[username] = { password, progress: {}, wrong: [], seen: {}, solvedIds: [] };
+    users[username] = { password, ...defaultUserData() };
     localStorage.setItem(`${STORE}:users`, JSON.stringify(users));
     loginAs(username);
     return;
@@ -324,17 +364,209 @@ function authenticate(mode) {
 }
 
 function getUsers() {
+  if (isServerStorageEnabled()) return remoteUserCache;
   return JSON.parse(localStorage.getItem(`${STORE}:users`) || "{}");
 }
 
 function saveUser(userData) {
+  if (!state.user) return;
+  if (isServerStorageEnabled()) {
+    remoteUserCache[state.user] = normalizeUserData(userData);
+    saveUserToServer(state.user, remoteUserCache[state.user]);
+    return;
+  }
   const users = getUsers();
   users[state.user] = userData;
   localStorage.setItem(`${STORE}:users`, JSON.stringify(users));
 }
 
 function userData() {
+  if (isServerStorageEnabled()) {
+    remoteUserCache[state.user] ||= defaultUserData();
+    return remoteUserCache[state.user];
+  }
   return getUsers()[state.user];
+}
+
+function defaultUserData() {
+  return {
+    progress: {},
+    wrong: [],
+    seen: {},
+    solvedIds: [],
+    servedBank: {},
+    studyLog: [],
+    wrongTypes: {}
+  };
+}
+
+function normalizeUserData(data) {
+  return { ...defaultUserData(), ...(data || {}) };
+}
+
+function serverConfig() {
+  return window.EDUDASH_SERVER || {};
+}
+
+function isServerStorageEnabled() {
+  const config = serverConfig();
+  return config.provider === "supabase" && Boolean(config.url) && Boolean(config.anonKey);
+}
+
+function serverTable() {
+  return serverConfig().table || "edudash_user_data";
+}
+
+function serverQuestionBankTable() {
+  return serverConfig().questionBankTable || "edudash_question_banks";
+}
+
+function serverUrl(path) {
+  return `${serverConfig().url.replace(/\/$/, "")}${path}`;
+}
+
+function serverQuestionFunctionUrl() {
+  return serverConfig().questionFunctionUrl || serverUrl("/functions/v1/generate-questions");
+}
+
+function serverAuthHeaders(extra = {}) {
+  const key = serverConfig().anonKey;
+  return {
+    apikey: key,
+    "Content-Type": "application/json",
+    ...extra
+  };
+}
+
+function serverDataHeaders(accessToken, extra = {}) {
+  return {
+    ...serverAuthHeaders(),
+    Authorization: `Bearer ${accessToken}`,
+    ...extra
+  };
+}
+
+async function serverGetUser(username) {
+  return serverRestoreUser(username);
+}
+
+function serverEmail(username) {
+  const hex = [...new TextEncoder().encode(username)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  const domain = serverConfig().emailDomain || "edudash.local";
+  return `u_${hex}@${domain}`;
+}
+
+function readServerSession() {
+  try {
+    return JSON.parse(localStorage.getItem(`${STORE}:serverSession`) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function writeServerSession(username, authData) {
+  const session = {
+    username,
+    access_token: authData.access_token,
+    refresh_token: authData.refresh_token,
+    user_id: authData.user?.id
+  };
+  if (!session.access_token || !session.user_id) {
+    throw new Error("서버 로그인 세션을 만들지 못했습니다. Supabase 이메일 확인 옵션을 꺼주세요.");
+  }
+  localStorage.setItem(`${STORE}:serverSession`, JSON.stringify(session));
+  return session;
+}
+
+async function supabaseSignUp(username, password) {
+  const response = await fetch(serverUrl("/auth/v1/signup"), {
+    method: "POST",
+    headers: serverAuthHeaders(),
+    body: JSON.stringify({
+      email: serverEmail(username),
+      password,
+      data: { username }
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data.msg || data.message || "서버 회원가입에 실패했습니다.";
+    if (/already|registered|exists/i.test(message)) throw new Error("이미 가입된 사용자입니다.");
+    throw new Error(message);
+  }
+  return data;
+}
+
+async function supabaseSignIn(username, password) {
+  const response = await fetch(serverUrl("/auth/v1/token?grant_type=password"), {
+    method: "POST",
+    headers: serverAuthHeaders(),
+    body: JSON.stringify({
+      email: serverEmail(username),
+      password
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.msg || data.message || "로그인 정보가 맞지 않습니다.");
+  return data;
+}
+
+async function serverRestoreUser(username) {
+  const session = readServerSession();
+  if (!session || session.username !== username) return null;
+  return { data: await serverLoadUserData(session) };
+}
+
+async function serverLoadUserData(session) {
+  const url = serverUrl(`/rest/v1/${serverTable()}?user_id=eq.${encodeURIComponent(session.user_id)}&select=username,data`);
+  const response = await fetch(url, {
+    headers: serverDataHeaders(session.access_token),
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("서버 학습 정보를 불러오지 못했습니다.");
+  const rows = await response.json();
+  return normalizeUserData(rows[0]?.data);
+}
+
+async function serverCreateUser(username, password) {
+  const authData = await supabaseSignUp(username, password);
+  const session = writeServerSession(username, authData);
+  const data = defaultUserData();
+  await serverUpsertUserData(session, data);
+  return data;
+}
+
+async function serverValidateUser(username, password) {
+  const authData = await supabaseSignIn(username, password);
+  const session = writeServerSession(username, authData);
+  const data = await serverLoadUserData(session);
+  await serverUpsertUserData(session, data);
+  return data;
+}
+
+async function saveUserToServer(username, userData) {
+  const session = readServerSession();
+  if (!session || session.username !== username) return;
+  await serverUpsertUserData(session, userData).catch(() => {});
+}
+
+async function serverUpsertUserData(session, userData) {
+  const payload = {
+    user_id: session.user_id,
+    username: session.username,
+    data: normalizeUserData(userData),
+    updated_at: new Date().toISOString()
+  };
+  const response = await fetch(serverUrl(`/rest/v1/${serverTable()}?on_conflict=user_id`), {
+    method: "POST",
+    headers: serverDataHeaders(session.access_token, {
+      Prefer: "resolution=merge-duplicates,return=minimal"
+    }),
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error("서버 학습 정보 저장에 실패했습니다.");
 }
 
 function loginAs(username) {
@@ -356,6 +588,7 @@ function logout() {
   if (state.quiz && !state.quiz.finished && state.quiz.answered.length > 0) finishPartialQuiz();
   state = { user: null, view: "dashboard", quiz: null };
   localStorage.removeItem(`${STORE}:session`);
+  localStorage.removeItem(`${STORE}:serverSession`);
   $("#username").value = "";
   $("#password").value = "";
   $("#quiz-runner").classList.add("hidden");
@@ -641,6 +874,7 @@ function openBankDb() {
 }
 
 async function getQuestionBank(bankKey) {
+  if (isServerStorageEnabled()) return getServerQuestionBank(bankKey);
   const db = await openBankDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(BANK_STORE, "readonly");
@@ -652,6 +886,10 @@ async function getQuestionBank(bankKey) {
 }
 
 async function saveQuestionBank(bankKey, bank) {
+  if (isServerStorageEnabled()) {
+    if (!isBankAdmin()) return;
+    return saveServerQuestionBank(bankKey, bank);
+  }
   const db = await openBankDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(BANK_STORE, "readwrite");
@@ -665,6 +903,38 @@ async function saveQuestionBank(bankKey, bank) {
       reject(tx.error);
     };
   });
+}
+
+async function getServerQuestionBank(bankKey) {
+  const session = readServerSession();
+  if (!session) return [];
+  const url = serverUrl(`/rest/v1/${serverQuestionBankTable()}?bank_key=eq.${encodeURIComponent(bankKey)}&select=questions`);
+  const response = await fetch(url, {
+    headers: serverDataHeaders(session.access_token),
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("서버 문제은행을 불러오지 못했습니다.");
+  const rows = await response.json();
+  return Array.isArray(rows[0]?.questions) ? rows[0].questions : [];
+}
+
+async function saveServerQuestionBank(bankKey, bank) {
+  const session = readServerSession();
+  if (!session) throw new Error("서버 로그인이 필요합니다.");
+  const payload = {
+    bank_key: bankKey,
+    questions: bank.slice(0, BANK_LIMIT),
+    updated_by: session.user_id,
+    updated_at: new Date().toISOString()
+  };
+  const response = await fetch(serverUrl(`/rest/v1/${serverQuestionBankTable()}?on_conflict=bank_key`), {
+    method: "POST",
+    headers: serverDataHeaders(session.access_token, {
+      Prefer: "resolution=merge-duplicates,return=minimal"
+    }),
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error("서버 문제은행 저장에 실패했습니다.");
 }
 
 async function deleteQuestionFromBank(bankKey, createdAt, prompt) {
@@ -879,14 +1149,13 @@ function makeStoredVariant(template, index, subjectId, grade, chapter) {
 }
 
 function loadGptSettings() {
-  if (!localStorage.getItem(`${STORE}:openaiKey`)) {
-    localStorage.setItem(`${STORE}:openaiKey`, BUILTIN_OPENAI_KEY);
-  }
+  localStorage.removeItem(`${STORE}:openaiKey`);
 }
 
 async function buildGptQuestionSet(subjectId, grade, chapter, count, existingBank = [], difficulty = "normal") {
-  const apiKey = localStorage.getItem(`${STORE}:openaiKey`);
-  if (!apiKey) throw new Error("API 키가 없습니다");
+  if (!isServerStorageEnabled()) throw new Error("서버 설정이 필요합니다. OpenAI API 키는 서버에서만 사용할 수 있습니다.");
+  const session = readServerSession();
+  if (!session) throw new Error("서버 로그인이 필요합니다.");
   const subject = getSubject(subjectId);
   const user = userData();
   const key = `${subjectId}:${grade}:${chapter.id}`;
@@ -900,12 +1169,9 @@ async function buildGptQuestionSet(subjectId, grade, chapter, count, existingBan
   shuffle(pool);
   const selectedTypes = pool.slice(0, count);
   const model = difficulty === "hard" ? "gpt-5" : "gpt-5-mini";
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch(serverQuestionFunctionUrl(), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
+    headers: serverDataHeaders(session.access_token),
     body: JSON.stringify({
       model,
       input: [
@@ -954,7 +1220,7 @@ async function buildGptQuestionSet(subjectId, grade, chapter, count, existingBan
   });
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`API 응답 오류 ${response.status}: ${errorText.slice(0, 120)}`);
+    throw new Error(`서버 문제 생성 오류 ${response.status}: ${errorText.slice(0, 120)}`);
   }
   const data = await response.json();
   const text = data.output_text || data.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text;
@@ -1494,7 +1760,7 @@ function renderDashboard() {
     </div>
     <div class="panel" style="margin-top:16px">
       <h3>최종 선택안</h3>
-      <p class="muted">정적 HTML/CSS/Vanilla JS 앱으로 구현했습니다. GPT 문제 생성은 퀴즈 화면에서 OpenAI API 키를 저장한 뒤 사용할 수 있고, 키는 현재 브라우저 LocalStorage에만 저장됩니다.</p>
+      <p class="muted">정적 HTML/CSS/Vanilla JS 앱으로 구현했습니다. 사용자 데이터와 문제은행은 서버에 저장하고, AI 문제 생성은 서버 함수가 처리합니다.</p>
     </div>`;
 }
 

@@ -1,9 +1,10 @@
-const CACHE_NAME = "edudash-2026-05-14-006";
+const CACHE_NAME = "edudash-2026-05-14-009";
 const CORE_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./data.js",
+  "./server_config.js",
   "./app.js",
   "./bank_override.js",
   "./dashboard_override.js",

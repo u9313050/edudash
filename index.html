@@ -10,15 +10,16 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="assets/icon-192.png">
   <link rel="icon" href="assets/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=20260514006">
+  <link rel="stylesheet" href="styles.css?v=20260514009">
   <script>
     window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]] }, svg: { fontCache: "global" } };
   </script>
   <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
-  <script defer src="data.js?v=20260514006"></script>
-  <script defer src="app.js?v=20260514006"></script>
-  <script defer src="bank_override.js?v=20260514006"></script>
-  <script defer src="dashboard_override.js?v=20260514006"></script>
+  <script defer src="server_config.js?v=20260514009"></script>
+  <script defer src="data.js?v=20260514009"></script>
+  <script defer src="app.js?v=20260514009"></script>
+  <script defer src="bank_override.js?v=20260514009"></script>
+  <script defer src="dashboard_override.js?v=20260514009"></script>
 </head>
 <body>
   <main id="auth-screen" class="auth-shell">
@@ -78,7 +79,33 @@
       </header>
 
       <section id="home-view" class="view home-view">
-        <img src="assets/edudash-intro.svg" alt="EduDash 프로그램 소개">
+        <img class="home-desktop-art" src="assets/edudash-intro.svg" alt="EduDash 프로그램 소개">
+        <div class="mobile-home">
+          <div class="mobile-home-hero">
+            <div class="mobile-home-mark">E</div>
+            <p class="eyebrow">오늘의 학습</p>
+            <h1>EduDash</h1>
+            <p>퀴즈, 오답, 문제은행을 한 화면에서 가볍게 이어가는 학습 공간</p>
+          </div>
+          <div class="mobile-home-grid">
+            <button type="button" data-home-target="quiz">
+              <span>퀴즈</span>
+              <strong>문제 풀기</strong>
+            </button>
+            <button type="button" data-home-target="wrong">
+              <span>오답노트</span>
+              <strong>다시 보기</strong>
+            </button>
+            <button type="button" data-home-target="stats">
+              <span>학습현황</span>
+              <strong>진도 확인</strong>
+            </button>
+            <button type="button" data-home-target="bank">
+              <span>문제은행</span>
+              <strong>문제 관리</strong>
+            </button>
+          </div>
+        </div>
       </section>
 
       <section id="quiz-view" class="view hidden">
