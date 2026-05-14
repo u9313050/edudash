@@ -1,7 +1,7 @@
 window.EDUDASH_SERVER = {
   provider: "supabase",
-  url: "https://uignemzarhnkftgdoxzw.supabase.co/rest/v1/",
-  anonKey: "sb_publishable_742A4_1LEGVF0Bll8cV3MA_gZtMoj13",
+  url: "",
+  anonKey: "",
   table: "edudash_user_data",
   questionBankTable: "edudash_question_banks",
   questionFunctionUrl: "",
