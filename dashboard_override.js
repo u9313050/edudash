@@ -1,3 +1,6 @@
+let cachedBankQuestionTotal = null;
+let cachedBankQuestionTotalAt = 0;
+
 function saveAnsweredQuestion(q, correct, selected, fromWrongNote) {
   const user = userData();
   const progressKey = `${q.grade || "-"}:${q.subjectName}:${q.chapterTitle}`;
@@ -57,6 +60,7 @@ async function renderStatsAsync() {
     ["monthly", "월간 현황"],
     ["overall", "전체 대비"],
   ];
+  window.__edudashStatsContext = { logs: user.studyLog, bankTotal, uniqueSolved, totalSolved, correct };
   const rows = Object.entries(user.progress || {}).filter(([key]) => {
     const [grade, subject] = key.split(":");
     return (selectedGrade === "all" || selectedGrade === grade) && (selectedSubject === "all" || selectedSubject === subject);
@@ -123,10 +127,35 @@ async function renderStatsAsync() {
   });
   $$("#stats-view [data-dashboard-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      localStorage.setItem(`${STORE}:dashboardTab`, button.dataset.dashboardTab);
-      renderStats();
+      switchStatsTab(button.dataset.dashboardTab);
     });
   });
+  renderMath();
+}
+
+function switchStatsTab(tab) {
+  const allowedTabs = ["daily", "weekly", "monthly", "overall"];
+  const activeTab = allowedTabs.includes(tab) ? tab : "daily";
+  localStorage.setItem(`${STORE}:dashboardTab`, activeTab);
+  const context = window.__edudashStatsContext;
+  if (!context) {
+    renderStats();
+    return;
+  }
+  $$("#stats-view [data-dashboard-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.dashboardTab === activeTab);
+  });
+  const content = $("#stats-view .tab-content");
+  if (content) {
+    content.innerHTML = dashboardTabContent(
+      activeTab,
+      context.logs,
+      context.bankTotal,
+      context.uniqueSolved,
+      context.totalSolved,
+      context.correct
+    );
+  }
   renderMath();
 }
 
@@ -414,16 +443,24 @@ function weekKey(date) {
 }
 
 async function getTotalBankQuestionCount() {
+  const now = Date.now();
+  if (cachedBankQuestionTotal !== null && now - cachedBankQuestionTotalAt < 60000) {
+    return cachedBankQuestionTotal;
+  }
   let total = 0;
+  const bankMap = typeof loadQuestionBankMap === "function" ? await loadQuestionBankMap() : null;
   for (const subject of db.subjects) {
     for (const [grade, chapters] of Object.entries(subject.grades)) {
       for (const chapter of chapters) {
         for (const difficulty of ["easy", "normal", "hard"]) {
-          const bank = await getQuestionBank(getBankKey(subject.id, grade, chapter.id, difficulty));
+          const bankKey = getBankKey(subject.id, grade, chapter.id, difficulty);
+          const bank = bankMap ? (bankMap.get(bankKey) || []) : await getQuestionBank(bankKey);
           total += bank.filter((question) => isQuestionForBank(question, subject.id, grade, chapter.id)).length;
         }
       }
     }
   }
+  cachedBankQuestionTotal = total;
+  cachedBankQuestionTotalAt = now;
   return total;
 }
