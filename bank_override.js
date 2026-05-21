@@ -1,3 +1,6 @@
+const BANK_DIFFICULTIES = ["easy", "normal", "hard"];
+let bankBulkMessage = "";
+
 async function renderQuestionBankView() {
   if (!state.user) return;
   const view = $("#bank-view");
@@ -7,6 +10,7 @@ async function renderQuestionBankView() {
   const summaries = await getBankSummaries(bankMap);
   const gradeFilter = localStorage.getItem(`${STORE}:bankFilterGrade`) || "all";
   const subjectFilter = localStorage.getItem(`${STORE}:bankFilterSubject`) || "all";
+  const batchSelection = getBatchSelection(gradeFilter, subjectFilter);
   const filteredSummaries = summaries.filter((item) => {
     const gradeMatch = gradeFilter === "all" || item.grade === gradeFilter;
     const subjectMatch = subjectFilter === "all" || item.subjectId === subjectFilter;
@@ -41,12 +45,6 @@ async function renderQuestionBankView() {
   view.innerHTML = `
     <div class="panel">
       <h3>문제은행 수량</h3>
-      <div class="inline-actions bank-file-actions">
-        <button id="export-bank-btn" class="secondary" type="button">문제은행 파일로 저장</button>
-        <button id="import-bank-btn" class="secondary" type="button">문제은행 파일 불러오기</button>
-        <input id="import-bank-file" class="hidden" type="file" accept="application/json,.json">
-      </div>
-      <p id="bank-file-message" class="message"></p>
       <div class="form-grid bank-filter-grid">
         <label>학년
           <select id="bank-filter-grade">
@@ -61,6 +59,7 @@ async function renderQuestionBankView() {
           </select>
         </label>
       </div>
+      ${batchGeneratePanel(batchSelection)}
       <table class="bank-summary">
         <thead><tr><th>학년</th><th>과목</th><th>챕터</th><th>난이도</th><th>수량</th><th>문제</th></tr></thead>
         <tbody>${summaryItems.length ? summaryItems.map((item) => bankSummaryRow(item, selected?.bankKey)).join("") : `<tr><td colspan="6" class="muted">조회된 문제은행이 없습니다.</td></tr>`}</tbody>
@@ -70,28 +69,21 @@ async function renderQuestionBankView() {
     <div class="panel" style="margin-top:16px">
       <h3>${selected ? `${selected.grade}학년 · ${selected.subjectName} · ${selected.chapterTitle} · ${difficultyLabel(selected.difficulty)}` : "문제 내용"}</h3>
       <p class="muted">저장 문제 ${selectedBank.length}/${BANK_LIMIT}개 · ${currentPage}/${totalPages}페이지</p>
-      ${selected ? `<div class="inline-actions"><button id="generate-bank-btn" class="primary">AI로 요청 수만큼 생성</button><input id="generate-bank-count" type="number" min="1" max="20" value="5" style="max-width:120px"></div><p id="bank-message" class="message"></p>` : ""}
+      ${selected ? `
+        <div class="inline-actions">
+          <button id="generate-bank-btn" class="primary" type="button">선택 항목 생성</button>
+          <input id="generate-bank-count" type="number" min="1" max="20" value="5" style="max-width:120px">
+        </div>
+        <p id="bank-message" class="message"></p>
+      ` : ""}
     </div>
-    ${selectedBank.length ? `<div class="list" style="margin-top:16px">${pageItems.map((question, index) => bankItem(question, index + ((currentPage - 1) * pageSize), selected.bankKey)).join("")}</div>${bankPagination(currentPage, totalPages)}` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">문제은행 화면에서 AI 생성 버튼을 눌러 해당 챕터 문제를 채워 주세요.</p></div>`}
+    ${selectedBank.length ? `<div class="list" style="margin-top:16px">${pageItems.map((question, index) => bankItem(question, index + ((currentPage - 1) * pageSize), selected.bankKey)).join("")}</div>${bankPagination(currentPage, totalPages)}` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">챕터 일괄 생성 또는 선택 항목 생성 버튼으로 문제를 채워 주세요.</p></div>`}
   `;
 
-  $("#export-bank-btn")?.addEventListener("click", () => exportQuestionBankFile(summaries));
-  $("#import-bank-btn")?.addEventListener("click", () => $("#import-bank-file")?.click());
-  $("#import-bank-file")?.addEventListener("change", async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const message = $("#bank-file-message");
-    message.textContent = "문제은행 파일을 불러오는 중입니다.";
-    try {
-      const result = await importQuestionBankFile(file);
-      message.textContent = `문제은행 파일을 반영했습니다. ${result.bankCount}개 묶음, ${result.questionCount}개 문제`;
-      event.target.value = "";
-      renderQuestionBankView();
-    } catch (error) {
-      message.textContent = error.message;
-    }
-  });
+  bindBankEvents(summaries, selected, pageKey);
+}
 
+function bindBankEvents(summaries, selected, pageKey) {
   $("#bank-filter-grade")?.addEventListener("change", (event) => {
     localStorage.setItem(`${STORE}:bankFilterGrade`, event.target.value);
     localStorage.setItem(`${STORE}:bankSummaryPage`, "1");
@@ -104,6 +96,26 @@ async function renderQuestionBankView() {
     localStorage.removeItem(`${STORE}:bankSelectedKey`);
     renderQuestionBankView();
   });
+
+  $("#bank-batch-grade")?.addEventListener("change", (event) => {
+    localStorage.setItem(`${STORE}:bankBatchGrade`, event.target.value);
+    localStorage.removeItem(`${STORE}:bankBatchChapter`);
+    renderQuestionBankView();
+  });
+  $("#bank-batch-subject")?.addEventListener("change", (event) => {
+    localStorage.setItem(`${STORE}:bankBatchSubject`, event.target.value);
+    localStorage.removeItem(`${STORE}:bankBatchGrade`);
+    localStorage.removeItem(`${STORE}:bankBatchChapter`);
+    renderQuestionBankView();
+  });
+  $("#bank-batch-chapter")?.addEventListener("change", (event) => {
+    localStorage.setItem(`${STORE}:bankBatchChapter`, event.target.value);
+  });
+  $("#bank-batch-difficulty")?.addEventListener("change", (event) => {
+    localStorage.setItem(`${STORE}:bankBatchDifficulty`, event.target.value);
+  });
+  $("#generate-chapter-bank-btn")?.addEventListener("click", generateChapterBank);
+
   $$("#bank-view [data-bank-summary]").forEach((button) => button.addEventListener("click", () => {
     localStorage.setItem(`${STORE}:bankSelectedKey`, button.dataset.bankKey);
     localStorage.setItem(`${STORE}:bankPage:${button.dataset.bankKey}`, "1");
@@ -137,17 +149,121 @@ async function renderQuestionBankView() {
         const total = await generateBankQuestions(subjectId, grade, chapterId, difficulty, count, ({ current, total, requested, status }) => {
           message.textContent = status === "requesting"
             ? `AI에 ${requested}개 생성을 요청 중입니다. 현재 ${current}/${total}개`
-            : `문제 저장 중입니다. 현재 ${current}/${total}개`;
+            : `문제를 저장 중입니다. 현재 ${current}/${total}개`;
         });
-        message.textContent = `문제은행이 ${total}/${BANK_LIMIT}개로 갱신되었습니다.`;
+        bankBulkMessage = `선택 항목이 ${total}/${BANK_LIMIT}개로 갱신되었습니다.`;
         renderQuestionBankView();
       } catch (error) {
         message.textContent = error.message;
       } finally {
         generateBtn.disabled = false;
-        generateBtn.textContent = "AI로 요청 수만큼 생성";
+        generateBtn.textContent = "선택 항목 생성";
       }
     });
+  }
+}
+
+function getBatchSelection(gradeFilter, subjectFilter) {
+  const subjectId = selectAvailableSubject(localStorage.getItem(`${STORE}:bankBatchSubject`) || subjectFilter);
+  const subject = getSubject(subjectId);
+  const grade = selectAvailableGrade(subject, localStorage.getItem(`${STORE}:bankBatchGrade`) || gradeFilter);
+  const chapters = subject.grades[grade] || [];
+  const savedChapter = localStorage.getItem(`${STORE}:bankBatchChapter`);
+  const chapterId = chapters.some((chapter) => chapter.id === savedChapter) ? savedChapter : chapters[0]?.id || "";
+  const difficulty = localStorage.getItem(`${STORE}:bankBatchDifficulty`) || "all";
+  return { subject, subjectId, grade, chapters, chapterId, difficulty };
+}
+
+function selectAvailableSubject(value) {
+  if (value && value !== "all" && db.subjects.some((subject) => subject.id === value)) return value;
+  return db.subjects[0]?.id || "";
+}
+
+function selectAvailableGrade(subject, value) {
+  const grades = Object.keys(subject?.grades || {});
+  if (value && value !== "all" && grades.includes(value)) return value;
+  return grades[0] || "";
+}
+
+function batchGeneratePanel(selection) {
+  if (!selection.subject || !selection.grade) return "";
+  return `
+    <div class="batch-bank-panel">
+      <h3>챕터 일괄 생성</h3>
+      <div class="form-grid batch-bank-grid">
+        <label>학년
+          <select id="bank-batch-grade">
+            ${Object.keys(selection.subject.grades).map((grade) => `<option value="${grade}" ${grade === selection.grade ? "selected" : ""}>${grade}학년</option>`).join("")}
+          </select>
+        </label>
+        <label>과목
+          <select id="bank-batch-subject">
+            ${db.subjects.map((subject) => `<option value="${subject.id}" ${subject.id === selection.subjectId ? "selected" : ""}>${escapeText(subject.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label>챕터
+          <select id="bank-batch-chapter">
+            ${selection.chapters.map((chapter) => `<option value="${chapter.id}" ${chapter.id === selection.chapterId ? "selected" : ""}>${escapeText(chapter.title)}</option>`).join("")}
+          </select>
+        </label>
+        <label>난이도
+          <select id="bank-batch-difficulty">
+            <option value="all" ${selection.difficulty === "all" ? "selected" : ""}>전체</option>
+            <option value="easy" ${selection.difficulty === "easy" ? "selected" : ""}>하</option>
+            <option value="normal" ${selection.difficulty === "normal" ? "selected" : ""}>중</option>
+            <option value="hard" ${selection.difficulty === "hard" ? "selected" : ""}>상</option>
+          </select>
+        </label>
+        <label>생성 수
+          <input id="bank-batch-count" type="number" min="1" max="20" value="5">
+        </label>
+      </div>
+      <div class="inline-actions">
+        <button id="generate-chapter-bank-btn" class="primary" type="button">선택 챕터 일괄 생성</button>
+      </div>
+      <p id="bank-batch-message" class="message">${escapeText(bankBulkMessage)}</p>
+    </div>
+  `;
+}
+
+async function generateChapterBank() {
+  const button = $("#generate-chapter-bank-btn");
+  const message = $("#bank-batch-message");
+  const subjectId = $("#bank-batch-subject").value;
+  const grade = $("#bank-batch-grade").value;
+  const chapterId = $("#bank-batch-chapter").value;
+  const difficulty = $("#bank-batch-difficulty").value;
+  const count = Math.max(1, Math.min(20, Number($("#bank-batch-count").value) || 5));
+  const levels = difficulty === "all" ? BANK_DIFFICULTIES : [difficulty];
+  const chapter = getChapter(subjectId, grade, chapterId);
+
+  button.disabled = true;
+  button.textContent = "일괄 생성 중...";
+  message.textContent = `${chapter?.title || "선택 챕터"} 문제를 생성합니다.`;
+  bankBulkMessage = "";
+
+  const results = [];
+  try {
+    for (const [index, level] of levels.entries()) {
+      message.textContent = `${difficultyLabel(level)} 난이도 생성 중 (${index + 1}/${levels.length})`;
+      const total = await generateBankQuestions(subjectId, grade, chapterId, level, count, ({ current, total, requested, status }) => {
+        message.textContent = status === "requesting"
+          ? `${difficultyLabel(level)} 난이도 ${requested}개 요청 중입니다. 현재 ${current}/${total}개`
+          : `${difficultyLabel(level)} 난이도 저장 중입니다. 현재 ${current}/${total}개`;
+      });
+      results.push(`${difficultyLabel(level)} ${total}/${BANK_LIMIT}개`);
+    }
+    bankBulkMessage = `${chapter?.title || "선택 챕터"} 생성 완료: ${results.join(" · ")}`;
+    localStorage.setItem(`${STORE}:bankFilterGrade`, grade);
+    localStorage.setItem(`${STORE}:bankFilterSubject`, subjectId);
+    localStorage.setItem(`${STORE}:bankSelectedKey`, getBankKey(subjectId, grade, chapterId, levels[0]));
+    localStorage.setItem(`${STORE}:bankSummaryPage`, "1");
+    renderQuestionBankView();
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "선택 챕터 일괄 생성";
   }
 }
 
@@ -159,7 +275,7 @@ async function loadQuestionBankMap() {
   for (const subject of db.subjects) {
     for (const [grade, chapters] of Object.entries(subject.grades)) {
       for (const chapter of chapters) {
-        for (const difficulty of ["easy", "normal", "hard"]) {
+        for (const difficulty of BANK_DIFFICULTIES) {
           const bankKey = getBankKey(subject.id, grade, chapter.id, difficulty);
           map.set(bankKey, await getQuestionBank(bankKey));
         }
@@ -176,7 +292,7 @@ async function loadServerQuestionBankMap() {
   const url = serverUrl(`/rest/v1/${serverQuestionBankTable()}?select=bank_key,questions`);
   const response = await fetch(url, {
     headers: serverDataHeaders(session.access_token),
-    cache: "no-store"
+    cache: "no-store",
   });
   if (!response.ok) throw new Error("서버 문제은행을 불러오지 못했습니다.");
   const rows = await response.json();
@@ -192,7 +308,7 @@ async function getBankSummaries(bankMap = null) {
   for (const subject of db.subjects) {
     for (const [grade, chapters] of Object.entries(subject.grades)) {
       for (const chapter of chapters) {
-        for (const difficulty of ["easy", "normal", "hard"]) {
+        for (const difficulty of BANK_DIFFICULTIES) {
           const bankKey = getBankKey(subject.id, grade, chapter.id, difficulty);
           const bank = source.get(bankKey) || [];
           const count = bank.filter((question) => isQuestionForBank(question, subject.id, grade, chapter.id)).length;
@@ -203,7 +319,7 @@ async function getBankSummaries(bankMap = null) {
             subjectName: subject.name,
             chapterTitle: chapter.title,
             difficulty,
-            count
+            count,
           });
         }
       }
@@ -241,70 +357,6 @@ function bankItem(question, index, bankKey) {
 
 function difficultyLabel(value) {
   return { easy: "하", normal: "중", hard: "상" }[value] || "중";
-}
-
-async function exportQuestionBankFile(summaries) {
-  const bankMap = await loadQuestionBankMap();
-  const banks = [];
-  for (const item of summaries) {
-    const questions = bankMap.get(item.bankKey) || [];
-    const cleaned = questions.filter((question) => isQuestionForBank(question, item.subjectId, item.grade, parseBankKey(item.bankKey).chapterId));
-    if (!cleaned.length) continue;
-    banks.push({
-      bankKey: item.bankKey,
-      meta: parseBankKey(item.bankKey),
-      grade: item.grade,
-      subjectName: item.subjectName,
-      chapterTitle: item.chapterTitle,
-      difficulty: item.difficulty,
-      questions: cleaned,
-    });
-  }
-  const payload = {
-    app: "EduDash",
-    type: "question-bank",
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    banks,
-  };
-  const fileName = "question-bank.json";
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const total = banks.reduce((sum, item) => sum + item.questions.length, 0);
-  const message = $("#bank-file-message");
-
-  if (window.showSaveFilePicker) {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: fileName,
-        types: [{ description: "EduDash question bank JSON", accept: { "application/json": [".json"] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      if (message) message.textContent = `question-bank.json 파일로 저장했습니다. dist/문제은행 폴더에 저장하면 로그인 때 자동으로 불러옵니다. ${banks.length}개 묶음, ${total}개 문제`;
-      return;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        if (message) message.textContent = "문제은행 파일 저장을 취소했습니다.";
-        return;
-      }
-    }
-  }
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-  if (message) message.textContent = `문제은행 파일을 만들었습니다. ${banks.length}개 묶음, ${total}개 문제`;
-}
-
-async function importQuestionBankFile(file) {
-  const text = await file.text();
-  return importQuestionBankPayload(JSON.parse(text));
 }
 
 async function importQuestionBankPayload(payload) {
