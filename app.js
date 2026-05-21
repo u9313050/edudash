@@ -3,7 +3,7 @@ const BANK_LIMIT = 100;
 const BANK_DB_NAME = "EduDashQuestionBank";
 const BANK_DB_VERSION = 1;
 const BANK_STORE = "chapterBanks";
-const APP_BUILD = "2026-05-14-009";
+const APP_BUILD = "2026-05-21-001";
 const BANK_ADMIN_USER = "u9313050";
 const SUBJECT_FILES = ["db_korean.json", "db_math.json", "db_science.json"];
 const AUTO_BANK_FOLDER = "문제은행/";
@@ -345,7 +345,7 @@ async function authenticate(mode) {
       remoteUserCache[username] = normalizeUserData(user);
       loginAs(username);
     } catch (error) {
-      showAuth(error.message || "서버 로그인 처리에 실패했습니다.");
+      showAuth(readableAuthError(error));
     }
     return;
   }
@@ -422,17 +422,34 @@ function serverQuestionBankTable() {
 }
 
 function serverUrl(path) {
-  return `${serverConfig().url.replace(/\/$/, "")}${path}`;
+  const rawUrl = serverConfig().url || "";
+  let baseUrl = rawUrl
+    .replace(/\/+$/, "")
+    .replace(/\/rest\/v1.*$/i, "")
+    .replace(/\/auth\/v1.*$/i, "")
+    .replace(/\/functions\/v1.*$/i, "");
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.hostname.endsWith(".supabase.co")) {
+      baseUrl = parsed.origin;
+    }
+  } catch {}
+  return `${baseUrl}${path}`;
 }
 
 function serverQuestionFunctionUrl() {
   return serverConfig().questionFunctionUrl || serverUrl("/functions/v1/generate-questions");
 }
 
+function serverSignupFunctionUrl() {
+  return serverConfig().signupFunctionUrl || serverUrl("/functions/v1/create-user");
+}
+
 function serverAuthHeaders(extra = {}) {
   const key = serverConfig().anonKey;
   return {
     apikey: key,
+    Authorization: `Bearer ${key}`,
     "Content-Type": "application/json",
     ...extra
   };
@@ -446,16 +463,36 @@ function serverDataHeaders(accessToken, extra = {}) {
   };
 }
 
+function readableAuthError(error) {
+  const message = String(error?.message || "");
+  if (/email.*rate.*limit|rate.*limit/i.test(message)) {
+    return "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  if (/invalid login credentials/i.test(message)) {
+    return "로그인 정보가 맞지 않습니다. 비밀번호를 확인하거나, 처음 사용하는 아이디라면 회원가입을 먼저 눌러 주세요.";
+  }
+  if (/email not confirmed/i.test(message)) {
+    return "이메일 확인이 필요한 계정입니다. Supabase에서 해당 사용자를 Confirm 처리하거나 이메일 확인 옵션을 꺼주세요.";
+  }
+  return message || "서버 로그인 처리에 실패했습니다.";
+}
+
 async function serverGetUser(username) {
   return serverRestoreUser(username);
 }
 
-function serverEmail(username) {
+function serverEmail(username, domainOverride = "") {
   const hex = [...new TextEncoder().encode(username)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
-  const domain = serverConfig().emailDomain || "edudash.local";
+  const domain = domainOverride || serverConfig().emailDomain || "edudash.app";
   return `u_${hex}@${domain}`;
+}
+
+function serverEmailCandidates(username) {
+  const configured = serverConfig().emailDomain || "edudash.app";
+  const domains = [configured, "edudash.app", "edudash.local"];
+  return [...new Set(domains)].map((domain) => serverEmail(username, domain));
 }
 
 function readServerSession() {
@@ -466,12 +503,16 @@ function readServerSession() {
   }
 }
 
-function writeServerSession(username, authData) {
+async function writeServerSession(username, authData, password = "") {
+  let sessionData = authData;
+  if ((!sessionData?.access_token || !sessionData?.user?.id) && password) {
+    sessionData = await supabaseSignIn(username, password);
+  }
   const session = {
     username,
-    access_token: authData.access_token,
-    refresh_token: authData.refresh_token,
-    user_id: authData.user?.id
+    access_token: sessionData.access_token,
+    refresh_token: sessionData.refresh_token,
+    user_id: sessionData.user?.id
   };
   if (!session.access_token || !session.user_id) {
     throw new Error("서버 로그인 세션을 만들지 못했습니다. Supabase 이메일 확인 옵션을 꺼주세요.");
@@ -481,36 +522,46 @@ function writeServerSession(username, authData) {
 }
 
 async function supabaseSignUp(username, password) {
-  const response = await fetch(serverUrl("/auth/v1/signup"), {
-    method: "POST",
-    headers: serverAuthHeaders(),
-    body: JSON.stringify({
-      email: serverEmail(username),
-      password,
-      data: { username }
-    })
-  });
+  let response;
+  try {
+    response = await fetch(serverSignupFunctionUrl(), {
+      method: "POST",
+      headers: serverAuthHeaders(),
+      body: JSON.stringify({
+        username,
+        email: serverEmail(username),
+        password
+      })
+    });
+  } catch {
+    throw new Error("회원가입 서버 함수(create-user)가 아직 배포되지 않았거나 접근할 수 없습니다.");
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data.msg || data.message || "서버 회원가입에 실패했습니다.";
     if (/already|registered|exists/i.test(message)) throw new Error("이미 가입된 사용자입니다.");
+    if (/email.*rate.*limit|rate.*limit/i.test(message)) throw new Error("요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.");
     throw new Error(message);
   }
   return data;
 }
 
 async function supabaseSignIn(username, password) {
-  const response = await fetch(serverUrl("/auth/v1/token?grant_type=password"), {
-    method: "POST",
-    headers: serverAuthHeaders(),
-    body: JSON.stringify({
-      email: serverEmail(username),
-      password
-    })
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.msg || data.message || "로그인 정보가 맞지 않습니다.");
-  return data;
+  let lastMessage = "로그인 정보가 맞지 않습니다.";
+  for (const email of serverEmailCandidates(username)) {
+    const response = await fetch(serverUrl("/auth/v1/token?grant_type=password"), {
+      method: "POST",
+      headers: serverAuthHeaders(),
+      body: JSON.stringify({ email, password })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return data;
+    lastMessage = data.msg || data.message || lastMessage;
+    if (!/invalid login credentials/i.test(lastMessage)) {
+      throw new Error(readableAuthError({ message: lastMessage }));
+    }
+  }
+  throw new Error(readableAuthError({ message: lastMessage }));
 }
 
 async function serverRestoreUser(username) {
@@ -531,8 +582,9 @@ async function serverLoadUserData(session) {
 }
 
 async function serverCreateUser(username, password) {
-  const authData = await supabaseSignUp(username, password);
-  const session = writeServerSession(username, authData);
+  await supabaseSignUp(username, password);
+  const authData = await supabaseSignIn(username, password);
+  const session = await writeServerSession(username, authData, password);
   const data = defaultUserData();
   await serverUpsertUserData(session, data);
   return data;
@@ -540,10 +592,52 @@ async function serverCreateUser(username, password) {
 
 async function serverValidateUser(username, password) {
   const authData = await supabaseSignIn(username, password);
-  const session = writeServerSession(username, authData);
+  const session = await writeServerSession(username, authData, password);
   const data = await serverLoadUserData(session);
   await serverUpsertUserData(session, data);
   return data;
+}
+
+async function serverAccountAction(action, payload = {}) {
+  const session = readServerSession();
+  if (!session) throw new Error("서버 로그인이 필요합니다.");
+  const response = await fetch(serverSignupFunctionUrl(), {
+    method: "POST",
+    headers: serverDataHeaders(session.access_token),
+    body: JSON.stringify({
+      action,
+      username: session.username,
+      ...payload
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.message || data.msg || "서버 계정 작업에 실패했습니다.");
+  }
+  return data;
+}
+
+async function serverResetCurrentPassword(newPassword) {
+  return serverAccountAction("resetPassword", { password: newPassword });
+}
+
+async function serverDeleteCurrentAccount() {
+  return serverAccountAction("deleteUser");
+}
+
+async function serverListUsers() {
+  return serverAccountAction("listUsers");
+}
+
+async function serverResetUserPassword(username, newPassword) {
+  return serverAccountAction("resetPassword", {
+    targetUsername: username,
+    password: newPassword
+  });
+}
+
+async function serverDeleteUser(username) {
+  return serverAccountAction("deleteUser", { targetUsername: username });
 }
 
 async function saveUserToServer(username, userData) {
@@ -605,6 +699,8 @@ function isBankAdmin() {
 function updateRoleVisibility() {
   const bankNav = document.querySelector('[data-view="bank"]');
   if (bankNav) bankNav.classList.toggle("hidden", !isBankAdmin());
+  const usersNav = document.querySelector('[data-view="users"]');
+  if (usersNav) usersNav.classList.toggle("hidden", !isBankAdmin());
 }
 
 function showAuth(message) {
@@ -613,13 +709,14 @@ function showAuth(message) {
 
 function switchView(view) {
   if (view === "bank" && !isBankAdmin()) view = "home";
+  if (view === "users" && !isBankAdmin()) view = "home";
   if (state.quiz && !state.quiz.finished && view !== "quiz") finishPartialQuiz();
   state.view = view;
   $$(".nav").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   $$(".view").forEach((section) => section.classList.add("hidden"));
   $(`#${view}-view`).classList.remove("hidden");
   $(".workspace").classList.toggle("home-mode", view === "home");
-  $("#view-title").textContent = { home: "EduDash", quiz: "퀴즈", wrong: "오답노트", bank: "문제은행", stats: "학습현황" }[view];
+  $("#view-title").textContent = { home: "EduDash", quiz: "퀴즈", wrong: "오답노트", bank: "문제은행", users: "회원관리", stats: "학습현황" }[view];
   updateTopChapterLabel();
   render();
 }
@@ -637,9 +734,10 @@ function toggleMobileMenu() {
 }
 
 function render() {
-  renderWrongNote();
-  renderQuestionBankView();
-  renderStats();
+  if (state.view === "wrong") renderWrongNote();
+  if (state.view === "bank") renderQuestionBankView();
+  if (state.view === "users") renderUserAdminView();
+  if (state.view === "stats") renderStats();
   if (state.view === "quiz") fillSubjectOptions();
   updateTopChapterLabel();
 }
@@ -1169,55 +1267,60 @@ async function buildGptQuestionSet(subjectId, grade, chapter, count, existingBan
   shuffle(pool);
   const selectedTypes = pool.slice(0, count);
   const model = difficulty === "hard" ? "gpt-5" : "gpt-5-mini";
-  const response = await fetch(serverQuestionFunctionUrl(), {
-    method: "POST",
-    headers: serverDataHeaders(session.access_token),
-    body: JSON.stringify({
-      model,
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: makeQuestionPrompt(subject.name, grade, chapter, selectedTypes, existingBank, difficulty)
-            }
-          ]
-        }
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "edudash_questions",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              questions: {
-                type: "array",
-                minItems: count,
-                maxItems: count,
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    typeIndex: { type: "integer" },
-                    prompt: { type: "string" },
-                    choices: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
-                    answer: { type: "string" },
-                    solution: { type: "string" }
-                  },
-                  required: ["typeIndex", "prompt", "choices", "answer", "solution"]
-                }
+  let response;
+  try {
+    response = await fetch(serverQuestionFunctionUrl(), {
+      method: "POST",
+      headers: serverDataHeaders(session.access_token),
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: makeQuestionPrompt(subject.name, grade, chapter, selectedTypes, existingBank, difficulty)
               }
-            },
-            required: ["questions"]
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "edudash_questions",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                questions: {
+                  type: "array",
+                  minItems: count,
+                  maxItems: count,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      typeIndex: { type: "integer" },
+                      prompt: { type: "string" },
+                      choices: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+                      answer: { type: "string" },
+                      solution: { type: "string" }
+                    },
+                    required: ["typeIndex", "prompt", "choices", "answer", "solution"]
+                  }
+                }
+              },
+              required: ["questions"]
+            }
           }
         }
-      }
-    })
-  });
+      })
+    });
+  } catch {
+    throw new Error("AI 문제 생성 서버 함수에 연결하지 못했습니다. Supabase Edge Function 주소와 CORS 설정을 확인해 주세요.");
+  }
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`서버 문제 생성 오류 ${response.status}: ${errorText.slice(0, 120)}`);
@@ -1995,6 +2098,183 @@ function resetCurrentUser() {
   render();
 }
 
+async function renderUserAdminView() {
+  const view = $("#users-view");
+  if (!view) return;
+  if (!isBankAdmin()) {
+    view.innerHTML = `<div class="panel"><h3>접근할 수 없습니다</h3><p class="muted">관리자만 회원 정보를 조회할 수 있습니다.</p></div>`;
+    return;
+  }
+  view.innerHTML = `<div class="panel"><h3>회원정보</h3><p class="muted">회원 목록을 불러오는 중입니다.</p></div>`;
+  try {
+    const result = await serverListUsers();
+    const users = Array.isArray(result.users) ? result.users : [];
+    view.innerHTML = `
+      <div class="panel">
+        <div class="section-head">
+          <div>
+            <h3>회원정보</h3>
+            <p class="muted">총 ${users.length}명</p>
+          </div>
+          <button id="refresh-users-btn" class="secondary" type="button">새로고침</button>
+        </div>
+        <table class="summary-table users-table">
+          <thead>
+            <tr><th>사용자</th><th>이메일</th><th>가입일</th><th>최근 로그인</th><th>작업</th></tr>
+          </thead>
+          <tbody>
+            ${users.length ? users.map(userAdminRow).join("") : `<tr><td colspan="5" class="muted">조회된 회원이 없습니다.</td></tr>`}
+          </tbody>
+        </table>
+        <p id="users-message" class="message"></p>
+      </div>
+    `;
+    $("#refresh-users-btn")?.addEventListener("click", renderUserAdminView);
+    $$("#users-view [data-reset-user-password]").forEach((button) => {
+      button.addEventListener("click", () => resetManagedUserPassword(button.dataset.username));
+    });
+    $$("#users-view [data-delete-managed-user]").forEach((button) => {
+      button.addEventListener("click", () => deleteManagedUser(button.dataset.username));
+    });
+  } catch (error) {
+    view.innerHTML = `<div class="panel"><h3>회원정보를 불러오지 못했습니다</h3><p class="message">${escapeText(error.message || "서버 오류가 발생했습니다.")}</p></div>`;
+  }
+}
+
+function userAdminRow(user) {
+  const username = user.username || "-";
+  const disabled = username === "-" ? "disabled" : "";
+  return `
+    <tr>
+      <td><strong>${escapeText(username)}</strong></td>
+      <td>${escapeText(user.email || "-")}</td>
+      <td>${formatDateTime(user.createdAt)}</td>
+      <td>${formatDateTime(user.lastSignInAt)}</td>
+      <td>
+        <div class="row-actions">
+          <button class="secondary" type="button" data-reset-user-password="1" data-username="${escapeAttr(username)}" ${disabled}>비밀번호 초기화</button>
+          <button class="danger" type="button" data-delete-managed-user="1" data-username="${escapeAttr(username)}" ${disabled}>계정 삭제</button>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+async function resetManagedUserPassword(username) {
+  if (!username || username === "-") return;
+  const newPassword = prompt(`${username} 사용자의 새 비밀번호를 입력하세요. 6자 이상이어야 합니다.`);
+  if (!newPassword) return;
+  if (newPassword.length < 6) {
+    alert("비밀번호는 6자 이상이어야 합니다.");
+    return;
+  }
+  const confirmPassword = prompt("새 비밀번호를 한 번 더 입력하세요.");
+  if (newPassword !== confirmPassword) {
+    alert("비밀번호가 서로 다릅니다.");
+    return;
+  }
+  const message = $("#users-message");
+  if (message) message.textContent = "비밀번호를 초기화하는 중입니다.";
+  try {
+    await serverResetUserPassword(username, newPassword);
+    if (message) message.textContent = `${username} 사용자의 비밀번호를 초기화했습니다.`;
+  } catch (error) {
+    if (message) message.textContent = error.message || "비밀번호 초기화에 실패했습니다.";
+  }
+}
+
+async function deleteManagedUser(username) {
+  if (!username || username === "-") return;
+  if (username === state.user && !confirm("현재 로그인한 관리자 계정입니다. 정말 삭제할까요?")) return;
+  if (!confirm(`${username} 계정을 삭제할까요? 학습 기록도 함께 삭제되며 되돌릴 수 없습니다.`)) return;
+  const typed = prompt("삭제하려면 사용자 이름을 다시 입력하세요.");
+  if (typed !== username) {
+    const message = $("#users-message");
+    if (message) message.textContent = "사용자 이름이 맞지 않아 삭제를 취소했습니다.";
+    return;
+  }
+  const message = $("#users-message");
+  if (message) message.textContent = "계정을 삭제하는 중입니다.";
+  try {
+    await serverDeleteUser(username);
+    if (username === state.user) {
+      logout();
+      showAuth("계정을 삭제했습니다.");
+      return;
+    }
+    if (message) message.textContent = `${username} 계정을 삭제했습니다.`;
+    renderUserAdminView();
+  } catch (error) {
+    if (message) message.textContent = error.message || "계정 삭제에 실패했습니다.";
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("ko-KR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+async function resetCurrentPassword() {
+  if (!state.user) return;
+  const newPassword = prompt("새 비밀번호를 입력하세요. 6자 이상이어야 합니다.");
+  if (!newPassword) return;
+  if (newPassword.length < 6) {
+    alert("비밀번호는 6자 이상이어야 합니다.");
+    return;
+  }
+  const confirmPassword = prompt("새 비밀번호를 한 번 더 입력하세요.");
+  if (newPassword !== confirmPassword) {
+    alert("비밀번호가 서로 다릅니다.");
+    return;
+  }
+  try {
+    if (isServerStorageEnabled()) {
+      await serverResetCurrentPassword(newPassword);
+    } else {
+      const users = getUsers();
+      if (!users[state.user]) throw new Error("사용자 정보를 찾을 수 없습니다.");
+      users[state.user].password = newPassword;
+      localStorage.setItem(`${STORE}:users`, JSON.stringify(users));
+    }
+    alert("비밀번호를 초기화했습니다. 다음 로그인부터 새 비밀번호를 사용하세요.");
+  } catch (error) {
+    alert(error.message || "비밀번호 초기화에 실패했습니다.");
+  }
+}
+
+async function deleteCurrentAccount() {
+  if (!state.user) return;
+  const username = state.user;
+  if (!confirm(`${username} 계정을 삭제할까요? 학습 기록도 함께 삭제되며 되돌릴 수 없습니다.`)) return;
+  const typed = prompt("삭제하려면 사용자 이름을 다시 입력하세요.");
+  if (typed !== username) {
+    alert("사용자 이름이 맞지 않아 삭제를 취소했습니다.");
+    return;
+  }
+  try {
+    if (isServerStorageEnabled()) {
+      await serverDeleteCurrentAccount();
+      delete remoteUserCache[username];
+    } else {
+      const users = getUsers();
+      delete users[username];
+      localStorage.setItem(`${STORE}:users`, JSON.stringify(users));
+    }
+    logout();
+    showAuth("계정을 삭제했습니다.");
+  } catch (error) {
+    alert(error.message || "계정 삭제에 실패했습니다.");
+  }
+}
+
 function shuffle(array) {
   const copy = [...array];
   for (let i = copy.length - 1; i > 0; i -= 1) {
@@ -2176,3 +2456,4 @@ function bankItem(question, index, bankKey) {
 function difficultyLabel(value) {
   return { easy: "하", normal: "중", hard: "상" }[value] || "중";
 }
+
