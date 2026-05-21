@@ -94,10 +94,14 @@ nav { display: grid; gap: 8px; }
 .bank-summary th { color: var(--muted); font-size: 13px; }
 .bank-summary button { padding: 8px 12px; }
 .bank-summary tr.active { background: var(--soft-blue); }
+.bank-check-cell { width: 46px; text-align: center !important; }
+.bank-check-cell input { width: 18px; height: 18px; padding: 0; accent-color: var(--blue); }
 .bank-filter-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); max-width: 720px; }
 .bank-file-actions { margin: 12px 0 6px; }
 .batch-bank-panel { margin: 12px 0 18px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbff; }
 .batch-bank-grid { grid-template-columns: 1fr 1fr minmax(240px, 2fr) 1fr 1fr; }
+.checked-bank-actions { align-items: end; }
+.count-inline { max-width: 140px; }
 .pagination { display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 16px; }
 .pagination span { color: var(--muted); font-weight: 800; }
 .dashboard-panel { margin-top: 16px; }

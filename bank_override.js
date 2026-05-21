@@ -10,12 +10,15 @@ async function renderQuestionBankView() {
   const summaries = await getBankSummaries(bankMap);
   const gradeFilter = localStorage.getItem(`${STORE}:bankFilterGrade`) || "all";
   const subjectFilter = localStorage.getItem(`${STORE}:bankFilterSubject`) || "all";
-  const batchSelection = getBatchSelection(gradeFilter, subjectFilter);
   const filteredSummaries = summaries.filter((item) => {
     const gradeMatch = gradeFilter === "all" || item.grade === gradeFilter;
     const subjectMatch = subjectFilter === "all" || item.subjectId === subjectFilter;
     return gradeMatch && subjectMatch;
   });
+  const availableKeys = new Set(filteredSummaries.map((item) => item.bankKey));
+  const checkedKeys = readCheckedBankKeys().filter((key) => availableKeys.has(key));
+  writeCheckedBankKeys(checkedKeys);
+  const checkedSet = new Set(checkedKeys);
 
   let selectedKey = localStorage.getItem(`${STORE}:bankSelectedKey`) || "";
   let selected = filteredSummaries.find((item) => item.bankKey === selectedKey);
@@ -41,6 +44,8 @@ async function renderQuestionBankView() {
   const totalPages = Math.max(1, Math.ceil(selectedBank.length / pageSize));
   const currentPage = Math.min(totalPages, Math.max(1, Number(localStorage.getItem(pageKey)) || 1));
   const pageItems = selectedBank.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const pageKeys = summaryItems.map((item) => item.bankKey);
+  const allPageChecked = pageKeys.length > 0 && pageKeys.every((key) => checkedSet.has(key));
 
   view.innerHTML = `
     <div class="panel">
@@ -59,62 +64,73 @@ async function renderQuestionBankView() {
           </select>
         </label>
       </div>
-      ${batchGeneratePanel(batchSelection)}
+      <div class="batch-bank-panel">
+        <div class="inline-actions checked-bank-actions">
+          <label class="count-inline">생성 수
+            <input id="checked-bank-count" type="number" min="1" max="20" value="5">
+          </label>
+          <button id="generate-checked-bank-btn" class="primary" type="button" ${checkedKeys.length ? "" : "disabled"}>체크 항목 일괄 생성</button>
+          <button id="clear-checked-bank-btn" class="secondary" type="button" ${checkedKeys.length ? "" : "disabled"}>선택 해제</button>
+        </div>
+        <p class="muted">체크된 항목 ${checkedKeys.length}개를 기준으로 문제를 생성합니다.</p>
+        <p id="bank-batch-message" class="message">${escapeText(bankBulkMessage)}</p>
+      </div>
       <table class="bank-summary">
-        <thead><tr><th>학년</th><th>과목</th><th>챕터</th><th>난이도</th><th>수량</th><th>문제</th></tr></thead>
-        <tbody>${summaryItems.length ? summaryItems.map((item) => bankSummaryRow(item, selected?.bankKey)).join("") : `<tr><td colspan="6" class="muted">조회된 문제은행이 없습니다.</td></tr>`}</tbody>
+        <thead>
+          <tr>
+            <th class="bank-check-cell"><input id="bank-check-page" type="checkbox" ${allPageChecked ? "checked" : ""} aria-label="현재 페이지 전체 선택"></th>
+            <th>학년</th><th>과목</th><th>챕터</th><th>난이도</th><th>수량</th><th>문제</th>
+          </tr>
+        </thead>
+        <tbody>${summaryItems.length ? summaryItems.map((item) => bankSummaryRow(item, selected?.bankKey, checkedSet.has(item.bankKey))).join("") : `<tr><td colspan="7" class="muted">조회된 문제은행이 없습니다.</td></tr>`}</tbody>
       </table>
       ${bankSummaryPagination(summaryPage, summaryTotalPages)}
     </div>
-    <div class="panel" style="margin-top:16px">
-      <h3>${selected ? `${selected.grade}학년 · ${selected.subjectName} · ${selected.chapterTitle} · ${difficultyLabel(selected.difficulty)}` : "문제 내용"}</h3>
-      <p class="muted">저장 문제 ${selectedBank.length}/${BANK_LIMIT}개 · ${currentPage}/${totalPages}페이지</p>
-      ${selected ? `
-        <div class="inline-actions">
-          <button id="generate-bank-btn" class="primary" type="button">선택 항목 생성</button>
-          <input id="generate-bank-count" type="number" min="1" max="20" value="5" style="max-width:120px">
-        </div>
-        <p id="bank-message" class="message"></p>
-      ` : ""}
-    </div>
-    ${selectedBank.length ? `<div class="list" style="margin-top:16px">${pageItems.map((question, index) => bankItem(question, index + ((currentPage - 1) * pageSize), selected.bankKey)).join("")}</div>${bankPagination(currentPage, totalPages)}` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">챕터 일괄 생성 또는 선택 항목 생성 버튼으로 문제를 채워 주세요.</p></div>`}
+    ${selectedBank.length ? `<div class="list" style="margin-top:16px">${pageItems.map((question, index) => bankItem(question, index + ((currentPage - 1) * pageSize), selected.bankKey)).join("")}</div>${bankPagination(currentPage, totalPages)}` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">목록에서 항목을 체크한 뒤 일괄 생성 버튼으로 문제를 채워 주세요.</p></div>`}
   `;
 
-  bindBankEvents(summaries, selected, pageKey);
+  bindBankEvents(filteredSummaries, pageKey, pageKeys);
 }
 
-function bindBankEvents(summaries, selected, pageKey) {
+function bindBankEvents(filteredSummaries, pageKey, pageKeys) {
   $("#bank-filter-grade")?.addEventListener("change", (event) => {
     localStorage.setItem(`${STORE}:bankFilterGrade`, event.target.value);
     localStorage.setItem(`${STORE}:bankSummaryPage`, "1");
     localStorage.removeItem(`${STORE}:bankSelectedKey`);
+    writeCheckedBankKeys([]);
     renderQuestionBankView();
   });
   $("#bank-filter-subject")?.addEventListener("change", (event) => {
     localStorage.setItem(`${STORE}:bankFilterSubject`, event.target.value);
     localStorage.setItem(`${STORE}:bankSummaryPage`, "1");
     localStorage.removeItem(`${STORE}:bankSelectedKey`);
+    writeCheckedBankKeys([]);
     renderQuestionBankView();
   });
 
-  $("#bank-batch-grade")?.addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankBatchGrade`, event.target.value);
-    localStorage.removeItem(`${STORE}:bankBatchChapter`);
+  $("#bank-check-page")?.addEventListener("change", (event) => {
+    const checked = event.target.checked;
+    const keys = new Set(readCheckedBankKeys());
+    pageKeys.forEach((key) => {
+      if (checked) keys.add(key);
+      else keys.delete(key);
+    });
+    writeCheckedBankKeys([...keys]);
     renderQuestionBankView();
   });
-  $("#bank-batch-subject")?.addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankBatchSubject`, event.target.value);
-    localStorage.removeItem(`${STORE}:bankBatchGrade`);
-    localStorage.removeItem(`${STORE}:bankBatchChapter`);
+  $$("#bank-view [data-bank-check]").forEach((checkbox) => checkbox.addEventListener("change", () => {
+    const keys = new Set(readCheckedBankKeys());
+    if (checkbox.checked) keys.add(checkbox.dataset.bankKey);
+    else keys.delete(checkbox.dataset.bankKey);
+    writeCheckedBankKeys([...keys]);
+    renderQuestionBankView();
+  }));
+  $("#clear-checked-bank-btn")?.addEventListener("click", () => {
+    writeCheckedBankKeys([]);
+    bankBulkMessage = "";
     renderQuestionBankView();
   });
-  $("#bank-batch-chapter")?.addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankBatchChapter`, event.target.value);
-  });
-  $("#bank-batch-difficulty")?.addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankBatchDifficulty`, event.target.value);
-  });
-  $("#generate-chapter-bank-btn")?.addEventListener("click", generateChapterBank);
+  $("#generate-checked-bank-btn")?.addEventListener("click", () => generateCheckedBanks(filteredSummaries));
 
   $$("#bank-view [data-bank-summary]").forEach((button) => button.addEventListener("click", () => {
     localStorage.setItem(`${STORE}:bankSelectedKey`, button.dataset.bankKey);
@@ -136,135 +152,58 @@ function bindBankEvents(summaries, selected, pageKey) {
     updateBankStatus();
   }));
 
-  const generateBtn = $("#generate-bank-btn");
-  if (generateBtn && selected) {
-    generateBtn.addEventListener("click", async () => {
-      const message = $("#bank-message");
-      const count = Math.max(1, Math.min(20, Number($("#generate-bank-count").value) || 5));
-      generateBtn.disabled = true;
-      generateBtn.textContent = "생성 중...";
-      message.textContent = "AI에 문제 생성을 요청 중입니다.";
-      try {
-        const { subjectId, grade, chapterId, difficulty } = parseBankKey(selected.bankKey);
-        const total = await generateBankQuestions(subjectId, grade, chapterId, difficulty, count, ({ current, total, requested, status }) => {
-          message.textContent = status === "requesting"
-            ? `AI에 ${requested}개 생성을 요청 중입니다. 현재 ${current}/${total}개`
-            : `문제를 저장 중입니다. 현재 ${current}/${total}개`;
-        });
-        bankBulkMessage = `선택 항목이 ${total}/${BANK_LIMIT}개로 갱신되었습니다.`;
-        renderQuestionBankView();
-      } catch (error) {
-        message.textContent = error.message;
-      } finally {
-        generateBtn.disabled = false;
-        generateBtn.textContent = "선택 항목 생성";
-      }
-    });
-  }
 }
 
-function getBatchSelection(gradeFilter, subjectFilter) {
-  const subjectId = selectAvailableSubject(localStorage.getItem(`${STORE}:bankBatchSubject`) || subjectFilter);
-  const subject = getSubject(subjectId);
-  const grade = selectAvailableGrade(subject, localStorage.getItem(`${STORE}:bankBatchGrade`) || gradeFilter);
-  const chapters = subject.grades[grade] || [];
-  const savedChapter = localStorage.getItem(`${STORE}:bankBatchChapter`);
-  const chapterId = chapters.some((chapter) => chapter.id === savedChapter) ? savedChapter : chapters[0]?.id || "";
-  const difficulty = localStorage.getItem(`${STORE}:bankBatchDifficulty`) || "all";
-  return { subject, subjectId, grade, chapters, chapterId, difficulty };
-}
-
-function selectAvailableSubject(value) {
-  if (value && value !== "all" && db.subjects.some((subject) => subject.id === value)) return value;
-  return db.subjects[0]?.id || "";
-}
-
-function selectAvailableGrade(subject, value) {
-  const grades = Object.keys(subject?.grades || {});
-  if (value && value !== "all" && grades.includes(value)) return value;
-  return grades[0] || "";
-}
-
-function batchGeneratePanel(selection) {
-  if (!selection.subject || !selection.grade) return "";
-  return `
-    <div class="batch-bank-panel">
-      <h3>챕터 일괄 생성</h3>
-      <div class="form-grid batch-bank-grid">
-        <label>학년
-          <select id="bank-batch-grade">
-            ${Object.keys(selection.subject.grades).map((grade) => `<option value="${grade}" ${grade === selection.grade ? "selected" : ""}>${grade}학년</option>`).join("")}
-          </select>
-        </label>
-        <label>과목
-          <select id="bank-batch-subject">
-            ${db.subjects.map((subject) => `<option value="${subject.id}" ${subject.id === selection.subjectId ? "selected" : ""}>${escapeText(subject.name)}</option>`).join("")}
-          </select>
-        </label>
-        <label>챕터
-          <select id="bank-batch-chapter">
-            ${selection.chapters.map((chapter) => `<option value="${chapter.id}" ${chapter.id === selection.chapterId ? "selected" : ""}>${escapeText(chapter.title)}</option>`).join("")}
-          </select>
-        </label>
-        <label>난이도
-          <select id="bank-batch-difficulty">
-            <option value="all" ${selection.difficulty === "all" ? "selected" : ""}>전체</option>
-            <option value="easy" ${selection.difficulty === "easy" ? "selected" : ""}>하</option>
-            <option value="normal" ${selection.difficulty === "normal" ? "selected" : ""}>중</option>
-            <option value="hard" ${selection.difficulty === "hard" ? "selected" : ""}>상</option>
-          </select>
-        </label>
-        <label>생성 수
-          <input id="bank-batch-count" type="number" min="1" max="20" value="5">
-        </label>
-      </div>
-      <div class="inline-actions">
-        <button id="generate-chapter-bank-btn" class="primary" type="button">선택 챕터 일괄 생성</button>
-      </div>
-      <p id="bank-batch-message" class="message">${escapeText(bankBulkMessage)}</p>
-    </div>
-  `;
-}
-
-async function generateChapterBank() {
-  const button = $("#generate-chapter-bank-btn");
+async function generateCheckedBanks(filteredSummaries) {
+  const button = $("#generate-checked-bank-btn");
   const message = $("#bank-batch-message");
-  const subjectId = $("#bank-batch-subject").value;
-  const grade = $("#bank-batch-grade").value;
-  const chapterId = $("#bank-batch-chapter").value;
-  const difficulty = $("#bank-batch-difficulty").value;
-  const count = Math.max(1, Math.min(20, Number($("#bank-batch-count").value) || 5));
-  const levels = difficulty === "all" ? BANK_DIFFICULTIES : [difficulty];
-  const chapter = getChapter(subjectId, grade, chapterId);
+  const count = Math.max(1, Math.min(20, Number($("#checked-bank-count").value) || 5));
+  const checkedSet = new Set(readCheckedBankKeys());
+  const targets = filteredSummaries.filter((item) => checkedSet.has(item.bankKey));
+  if (!targets.length) {
+    message.textContent = "생성할 항목을 먼저 체크해 주세요.";
+    return;
+  }
 
   button.disabled = true;
   button.textContent = "일괄 생성 중...";
-  message.textContent = `${chapter?.title || "선택 챕터"} 문제를 생성합니다.`;
   bankBulkMessage = "";
 
   const results = [];
   try {
-    for (const [index, level] of levels.entries()) {
-      message.textContent = `${difficultyLabel(level)} 난이도 생성 중 (${index + 1}/${levels.length})`;
-      const total = await generateBankQuestions(subjectId, grade, chapterId, level, count, ({ current, total, requested, status }) => {
+    for (const [index, item] of targets.entries()) {
+      const label = `${item.grade}학년 · ${item.subjectName} · ${item.chapterTitle} · ${difficultyLabel(item.difficulty)}`;
+      message.textContent = `${label} 생성 중 (${index + 1}/${targets.length})`;
+      const total = await generateBankQuestions(item.subjectId, item.grade, parseBankKey(item.bankKey).chapterId, item.difficulty, count, ({ current, total, requested, status }) => {
         message.textContent = status === "requesting"
-          ? `${difficultyLabel(level)} 난이도 ${requested}개 요청 중입니다. 현재 ${current}/${total}개`
-          : `${difficultyLabel(level)} 난이도 저장 중입니다. 현재 ${current}/${total}개`;
+          ? `${label}: ${requested}개 요청 중입니다. 현재 ${current}/${total}개`
+          : `${label}: 저장 중입니다. 현재 ${current}/${total}개`;
       });
-      results.push(`${difficultyLabel(level)} ${total}/${BANK_LIMIT}개`);
+      results.push(`${label} ${total}/${BANK_LIMIT}개`);
     }
-    bankBulkMessage = `${chapter?.title || "선택 챕터"} 생성 완료: ${results.join(" · ")}`;
-    localStorage.setItem(`${STORE}:bankFilterGrade`, grade);
-    localStorage.setItem(`${STORE}:bankFilterSubject`, subjectId);
-    localStorage.setItem(`${STORE}:bankSelectedKey`, getBankKey(subjectId, grade, chapterId, levels[0]));
-    localStorage.setItem(`${STORE}:bankSummaryPage`, "1");
+    const first = targets[0];
+    bankBulkMessage = `체크 항목 ${targets.length}개 생성 완료: ${results.join(" · ")}`;
+    localStorage.setItem(`${STORE}:bankSelectedKey`, first.bankKey);
     renderQuestionBankView();
   } catch (error) {
     message.textContent = error.message;
   } finally {
     button.disabled = false;
-    button.textContent = "선택 챕터 일괄 생성";
+    button.textContent = "체크 항목 일괄 생성";
   }
+}
+
+function readCheckedBankKeys() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(`${STORE}:bankCheckedKeys`) || "[]");
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCheckedBankKeys(keys) {
+  localStorage.setItem(`${STORE}:bankCheckedKeys`, JSON.stringify([...new Set(keys)]));
 }
 
 async function loadQuestionBankMap() {
@@ -344,9 +283,9 @@ function bankSummaryPagination(currentPage, totalPages) {
   return `<div class="pagination"><button class="secondary" data-bank-summary-page="${prev}" ${currentPage === 1 ? "disabled" : ""}>이전</button><span>${currentPage} / ${totalPages}</span><button class="secondary" data-bank-summary-page="${next}" ${currentPage === totalPages ? "disabled" : ""}>다음</button></div>`;
 }
 
-function bankSummaryRow(item, selectedKey) {
+function bankSummaryRow(item, selectedKey, checked) {
   const active = item.bankKey === selectedKey ? " class=\"active\"" : "";
-  return `<tr${active}><td>${item.grade}학년</td><td>${escapeText(item.subjectName)}</td><td>${escapeText(item.chapterTitle)}</td><td>${difficultyLabel(item.difficulty)}</td><td><strong>${item.count}</strong> / ${BANK_LIMIT}</td><td><button class="secondary" data-bank-summary="1" data-bank-key="${escapeAttr(item.bankKey)}">보기</button></td></tr>`;
+  return `<tr${active}><td class="bank-check-cell"><input type="checkbox" data-bank-check="1" data-bank-key="${escapeAttr(item.bankKey)}" ${checked ? "checked" : ""} aria-label="${escapeAttr(`${item.grade}학년 ${item.subjectName} ${item.chapterTitle} ${difficultyLabel(item.difficulty)} 선택`)}"></td><td>${item.grade}학년</td><td>${escapeText(item.subjectName)}</td><td>${escapeText(item.chapterTitle)}</td><td>${difficultyLabel(item.difficulty)}</td><td><strong>${item.count}</strong> / ${BANK_LIMIT}</td><td><button class="secondary" data-bank-summary="1" data-bank-key="${escapeAttr(item.bankKey)}">보기</button></td></tr>`;
 }
 
 function bankItem(question, index, bankKey) {

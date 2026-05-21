@@ -3,7 +3,7 @@ const BANK_LIMIT = 100;
 const BANK_DB_NAME = "EduDashQuestionBank";
 const BANK_DB_VERSION = 1;
 const BANK_STORE = "chapterBanks";
-const APP_BUILD = "2026-05-21-007";
+const APP_BUILD = "2026-05-21-009";
 const BANK_ADMIN_USER = "u9313050";
 const SUBJECT_FILES = ["db_korean.json", "db_math.json", "db_science.json"];
 const AUTO_BANK_FOLDER = "문제은행/";
@@ -1889,94 +1889,6 @@ function renderWrongNote() {
   renderMath();
 }
 
-async function renderQuestionBankView() {
-  if (!state.user) return;
-  const view = $("#bank-view");
-  if (!view) return;
-  if (!isBankAdmin()) {
-    view.innerHTML = `<div class="panel"><h3>접근할 수 없습니다</h3><p class="muted">문제은행 관리는 관리자만 사용할 수 있습니다.</p></div>`;
-    return;
-  }
-  const selectedSubject = localStorage.getItem(`${STORE}:bankSubject`) || db.subjects[0]?.id || "";
-  const subject = getSubject(selectedSubject);
-  const selectedGrade = localStorage.getItem(`${STORE}:bankGrade`) || "1";
-  const grade = subject.grades[selectedGrade] ? selectedGrade : Object.keys(subject.grades)[0];
-  const chapters = subject.grades[grade] || [];
-  const selectedChapter = localStorage.getItem(`${STORE}:bankChapter`) || chapters[0]?.id || "";
-  const chapter = chapters.find((item) => item.id === selectedChapter) || chapters[0];
-  const difficulty = localStorage.getItem(`${STORE}:bankDifficulty`) || "normal";
-
-  if (!chapter) {
-    view.innerHTML = `<div class="panel"><h3>문제은행을 볼 수 없습니다</h3><p class="muted">과목과 챕터 데이터가 없습니다.</p></div>`;
-    return;
-  }
-
-  const bankKey = getBankKey(subject.id, grade, chapter.id, difficulty);
-  const bank = await getQuestionBank(bankKey);
-  view.innerHTML = `
-    <div class="panel">
-      <h3>문제은행 조회</h3>
-      <div class="form-grid">
-        <label>과목
-          <select id="bank-subject-select">
-            ${db.subjects.map((item) => `<option value="${item.id}">${item.name}</option>`).join("")}
-          </select>
-        </label>
-        <label>학년
-          <select id="bank-grade-select">
-            ${Object.keys(subject.grades).map((item) => `<option value="${item}">${item}학년</option>`).join("")}
-          </select>
-        </label>
-        <label>챕터
-          <select id="bank-chapter-select">
-            ${chapters.map((item) => `<option value="${item.id}">${item.title}</option>`).join("")}
-          </select>
-        </label>
-        <label>난이도
-          <select id="bank-difficulty-select">
-            <option value="easy">하</option>
-            <option value="normal">중</option>
-            <option value="hard">상</option>
-          </select>
-        </label>
-      </div>
-      <p class="muted">${subject.name} ${grade}학년 · ${chapter.title} · ${difficultyLabel(difficulty)} 난이도: ${bank.length}/${BANK_LIMIT}개</p>
-    </div>
-    ${bank.length ? `<div class="list" style="margin-top:16px">${bank.map((question, index) => bankItem(question, index, bankKey)).join("")}</div>` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">퀴즈를 시작하면 AI가 생성한 문제가 이곳에 저장됩니다.</p></div>`}
-  `;
-
-  $("#bank-subject-select").value = subject.id;
-  $("#bank-grade-select").value = grade;
-  $("#bank-chapter-select").value = chapter.id;
-  $("#bank-difficulty-select").value = difficulty;
-  $("#bank-subject-select").addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankSubject`, event.target.value);
-    localStorage.removeItem(`${STORE}:bankChapter`);
-    renderQuestionBankView();
-  });
-  $("#bank-grade-select").addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankGrade`, event.target.value);
-    localStorage.removeItem(`${STORE}:bankChapter`);
-    renderQuestionBankView();
-  });
-  $("#bank-chapter-select").addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankChapter`, event.target.value);
-    renderQuestionBankView();
-  });
-  $("#bank-difficulty-select").addEventListener("change", (event) => {
-    localStorage.setItem(`${STORE}:bankDifficulty`, event.target.value);
-    renderQuestionBankView();
-  });
-  $$("#bank-view [data-delete-bank]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (!confirm("선택한 문제를 문제은행에서 삭제할까요?")) return;
-      await deleteQuestionFromBank(button.dataset.bankKey, button.dataset.createdAt, button.dataset.prompt);
-      renderQuestionBankView();
-      updateBankStatus();
-    });
-  });
-}
-
 function bankItem(question, index, bankKey) {
   const preview = formatMathText(question.prompt);
   return `<article class="panel bank-item">
@@ -2326,84 +2238,6 @@ function escapeAttr(text) {
 
 function renderMath() {
   if (window.MathJax?.typesetPromise) window.MathJax.typesetPromise();
-}
-
-async function renderQuestionBankView() {
-  if (!state.user) return;
-  const view = $("#bank-view");
-  if (!view) return;
-  const summaries = await getBankSummaries();
-  const selectedKey = localStorage.getItem(`${STORE}:bankSelectedKey`) || summaries.find((item) => item.count > 0)?.bankKey || summaries[0]?.bankKey || "";
-  const selected = summaries.find((item) => item.bankKey === selectedKey) || summaries[0];
-  const bank = selected ? await getQuestionBank(selected.bankKey) : [];
-  const pageSize = 10;
-  const pageKey = `${STORE}:bankPage:${selected?.bankKey || "none"}`;
-  const totalPages = Math.max(1, Math.ceil(bank.length / pageSize));
-  const currentPage = Math.min(totalPages, Math.max(1, Number(localStorage.getItem(pageKey)) || 1));
-  const pageItems = bank.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-
-  view.innerHTML = `
-    <div class="panel">
-      <h3>문제은행 수량</h3>
-      <table class="bank-summary">
-        <thead>
-          <tr><th>학년</th><th>과목</th><th>챕터</th><th>난이도</th><th>수량</th><th>문제</th></tr>
-        </thead>
-        <tbody>
-          ${summaries.map((item) => bankSummaryRow(item, selected?.bankKey)).join("")}
-        </tbody>
-      </table>
-    </div>
-    <div class="panel" style="margin-top:16px">
-      <h3>${selected ? `${selected.grade}학년 · ${selected.subjectName} · ${selected.chapterTitle} · ${difficultyLabel(selected.difficulty)}` : "문제 내용"}</h3>
-      <p class="muted">저장 문제 ${bank.length}/${BANK_LIMIT}개 · ${currentPage}/${totalPages}페이지</p>
-      ${selected ? `<div class="inline-actions"><button id="generate-bank-btn" class="primary">AI로 요청 수만큼 생성</button><input id="generate-bank-count" type="number" min="1" max="20" value="5" style="max-width:120px"></div><p id="bank-message" class="message"></p>` : ""}
-    </div>
-    ${bank.length ? `<div class="list" style="margin-top:16px">${pageItems.map((question, index) => bankItem(question, index + ((currentPage - 1) * pageSize), selected.bankKey)).join("")}</div>${bankPagination(currentPage, totalPages)}` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">퀴즈를 시작하면 AI가 생성한 문제가 이곳에 저장됩니다.</p></div>`}
-  `;
-
-  $$("#bank-view [data-bank-summary]").forEach((button) => {
-    button.addEventListener("click", () => {
-      localStorage.setItem(`${STORE}:bankSelectedKey`, button.dataset.bankKey);
-      localStorage.setItem(`${STORE}:bankPage:${button.dataset.bankKey}`, "1");
-      renderQuestionBankView();
-    });
-  });
-  $$("#bank-view [data-bank-page]").forEach((button) => {
-    button.addEventListener("click", () => {
-      localStorage.setItem(pageKey, button.dataset.bankPage);
-      renderQuestionBankView();
-    });
-  });
-  $$("#bank-view [data-delete-bank]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (!confirm("선택한 문제를 문제은행에서 삭제할까요?")) return;
-      await deleteQuestionFromBank(button.dataset.bankKey, button.dataset.createdAt, button.dataset.prompt);
-      renderQuestionBankView();
-      updateBankStatus();
-    });
-  });
-  const generateBtn = $("#generate-bank-btn");
-  if (generateBtn && selected) {
-    generateBtn.addEventListener("click", async () => {
-      const message = $("#bank-message");
-      const count = Math.max(1, Math.min(20, Number($("#generate-bank-count").value) || 5));
-      generateBtn.disabled = true;
-      generateBtn.textContent = "생성 중...";
-      message.textContent = "";
-      try {
-        const [subjectId, grade, chapterId, difficulty] = selected.bankKey.split(":");
-        const total = await generateBankQuestions(subjectId, grade, chapterId, difficulty, count);
-        message.textContent = `문제은행이 ${total}/${BANK_LIMIT}개로 갱신되었습니다.`;
-        renderQuestionBankView();
-      } catch (error) {
-        message.textContent = error.message;
-      } finally {
-        generateBtn.disabled = false;
-        generateBtn.textContent = "AI로 요청 수만큼 생성";
-      }
-    });
-  }
 }
 
 function bankPagination(currentPage, totalPages) {
