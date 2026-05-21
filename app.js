@@ -1,4 +1,4 @@
-const STORE = "edudash:v3";
+﻿const STORE = "edudash:v3";
 const BANK_LIMIT = 100;
 const BANK_DB_NAME = "EduDashQuestionBank";
 const BANK_DB_VERSION = 1;

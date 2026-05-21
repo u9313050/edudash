@@ -1,4 +1,4 @@
-const CACHE_NAME = "edudash-2026-05-14-009";
+const CACHE_NAME = "edudash-2026-05-21-001";
 const CORE_ASSETS = [
   "./",
   "./index.html",

@@ -2,7 +2,9 @@ async function renderQuestionBankView() {
   if (!state.user) return;
   const view = $("#bank-view");
   if (!view) return;
-  const summaries = await getBankSummaries();
+
+  const bankMap = await loadQuestionBankMap();
+  const summaries = await getBankSummaries(bankMap);
   const gradeFilter = localStorage.getItem(`${STORE}:bankFilterGrade`) || "all";
   const subjectFilter = localStorage.getItem(`${STORE}:bankFilterSubject`) || "all";
   const filteredSummaries = summaries.filter((item) => {
@@ -10,19 +12,32 @@ async function renderQuestionBankView() {
     const subjectMatch = subjectFilter === "all" || item.subjectId === subjectFilter;
     return gradeMatch && subjectMatch;
   });
-  const selectedKey = localStorage.getItem(`${STORE}:bankSelectedKey`) || filteredSummaries.find((item) => item.count > 0)?.bankKey || filteredSummaries[0]?.bankKey || "";
-  const selected = filteredSummaries.find((item) => item.bankKey === selectedKey) || filteredSummaries[0];
+
+  let selectedKey = localStorage.getItem(`${STORE}:bankSelectedKey`) || "";
+  let selected = filteredSummaries.find((item) => item.bankKey === selectedKey);
+  if (!selected) {
+    selected = filteredSummaries.find((item) => item.count > 0) || filteredSummaries[0] || null;
+    selectedKey = selected?.bankKey || "";
+    if (selectedKey) localStorage.setItem(`${STORE}:bankSelectedKey`, selectedKey);
+  }
+
   const selectedMeta = selected ? parseBankKey(selected.bankKey) : null;
-  const bank = selected ? (await getQuestionBank(selected.bankKey)).filter((question) => isQuestionForBank(question, selectedMeta.subjectId, selectedMeta.grade, selectedMeta.chapterId)) : [];
+  const selectedRawBank = selected ? (bankMap.get(selected.bankKey) || []) : [];
+  const selectedBank = selected && selectedMeta
+    ? selectedRawBank.filter((question) => isQuestionForBank(question, selectedMeta.subjectId, selectedMeta.grade, selectedMeta.chapterId))
+    : [];
+
   const summaryPageSize = 10;
   const summaryTotalPages = Math.max(1, Math.ceil(filteredSummaries.length / summaryPageSize));
   const summaryPage = Math.min(summaryTotalPages, Math.max(1, Number(localStorage.getItem(`${STORE}:bankSummaryPage`)) || 1));
   const summaryItems = filteredSummaries.slice((summaryPage - 1) * summaryPageSize, summaryPage * summaryPageSize);
+
   const pageSize = 10;
   const pageKey = `${STORE}:bankPage:${selected?.bankKey || "none"}`;
-  const totalPages = Math.max(1, Math.ceil(bank.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(selectedBank.length / pageSize));
   const currentPage = Math.min(totalPages, Math.max(1, Number(localStorage.getItem(pageKey)) || 1));
-  const pageItems = bank.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const pageItems = selectedBank.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   view.innerHTML = `
     <div class="panel">
       <h3>문제은행 수량</h3>
@@ -54,11 +69,12 @@ async function renderQuestionBankView() {
     </div>
     <div class="panel" style="margin-top:16px">
       <h3>${selected ? `${selected.grade}학년 · ${selected.subjectName} · ${selected.chapterTitle} · ${difficultyLabel(selected.difficulty)}` : "문제 내용"}</h3>
-      <p class="muted">저장 문제 ${bank.length}/${BANK_LIMIT}개 · ${currentPage}/${totalPages}페이지</p>
+      <p class="muted">저장 문제 ${selectedBank.length}/${BANK_LIMIT}개 · ${currentPage}/${totalPages}페이지</p>
       ${selected ? `<div class="inline-actions"><button id="generate-bank-btn" class="primary">AI로 요청 수만큼 생성</button><input id="generate-bank-count" type="number" min="1" max="20" value="5" style="max-width:120px"></div><p id="bank-message" class="message"></p>` : ""}
     </div>
-    ${bank.length ? `<div class="list" style="margin-top:16px">${pageItems.map((question, index) => bankItem(question, index + ((currentPage - 1) * pageSize), selected.bankKey)).join("")}</div>${bankPagination(currentPage, totalPages)}` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">퀴즈를 시작하면 AI가 생성한 문제가 이곳에 저장됩니다.</p></div>`}
+    ${selectedBank.length ? `<div class="list" style="margin-top:16px">${pageItems.map((question, index) => bankItem(question, index + ((currentPage - 1) * pageSize), selected.bankKey)).join("")}</div>${bankPagination(currentPage, totalPages)}` : `<div class="panel" style="margin-top:16px"><h3>저장된 문제가 없습니다</h3><p class="muted">문제은행 화면에서 AI 생성 버튼을 눌러 해당 챕터 문제를 채워 주세요.</p></div>`}
   `;
+
   $("#export-bank-btn")?.addEventListener("click", () => exportQuestionBankFile(summaries));
   $("#import-bank-btn")?.addEventListener("click", () => $("#import-bank-file")?.click());
   $("#import-bank-file")?.addEventListener("change", async (event) => {
@@ -75,6 +91,7 @@ async function renderQuestionBankView() {
       message.textContent = error.message;
     }
   });
+
   $("#bank-filter-grade")?.addEventListener("change", (event) => {
     localStorage.setItem(`${STORE}:bankFilterGrade`, event.target.value);
     localStorage.setItem(`${STORE}:bankSummaryPage`, "1");
@@ -106,6 +123,7 @@ async function renderQuestionBankView() {
     renderQuestionBankView();
     updateBankStatus();
   }));
+
   const generateBtn = $("#generate-bank-btn");
   if (generateBtn && selected) {
     generateBtn.addEventListener("click", async () => {
@@ -133,15 +151,60 @@ async function renderQuestionBankView() {
   }
 }
 
-async function getBankSummaries() {
+async function loadQuestionBankMap() {
+  if (isServerStorageEnabled()) {
+    return loadServerQuestionBankMap();
+  }
+  const map = new Map();
+  for (const subject of db.subjects) {
+    for (const [grade, chapters] of Object.entries(subject.grades)) {
+      for (const chapter of chapters) {
+        for (const difficulty of ["easy", "normal", "hard"]) {
+          const bankKey = getBankKey(subject.id, grade, chapter.id, difficulty);
+          map.set(bankKey, await getQuestionBank(bankKey));
+        }
+      }
+    }
+  }
+  return map;
+}
+
+async function loadServerQuestionBankMap() {
+  const session = readServerSession();
+  const map = new Map();
+  if (!session) return map;
+  const url = serverUrl(`/rest/v1/${serverQuestionBankTable()}?select=bank_key,questions`);
+  const response = await fetch(url, {
+    headers: serverDataHeaders(session.access_token),
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("서버 문제은행을 불러오지 못했습니다.");
+  const rows = await response.json();
+  rows.forEach((row) => {
+    map.set(row.bank_key, Array.isArray(row.questions) ? row.questions : []);
+  });
+  return map;
+}
+
+async function getBankSummaries(bankMap = null) {
+  const source = bankMap || await loadQuestionBankMap();
   const rows = [];
   for (const subject of db.subjects) {
     for (const [grade, chapters] of Object.entries(subject.grades)) {
       for (const chapter of chapters) {
         for (const difficulty of ["easy", "normal", "hard"]) {
           const bankKey = getBankKey(subject.id, grade, chapter.id, difficulty);
-          const bank = await getQuestionBank(bankKey);
-          rows.push({ bankKey, subjectId: subject.id, grade, subjectName: subject.name, chapterTitle: chapter.title, difficulty, count: bank.length });
+          const bank = source.get(bankKey) || [];
+          const count = bank.filter((question) => isQuestionForBank(question, subject.id, grade, chapter.id)).length;
+          rows.push({
+            bankKey,
+            subjectId: subject.id,
+            grade,
+            subjectName: subject.name,
+            chapterTitle: chapter.title,
+            difficulty,
+            count
+          });
         }
       }
     }
@@ -171,8 +234,9 @@ function bankSummaryRow(item, selectedKey) {
 }
 
 function bankItem(question, index, bankKey) {
-  const preview = formatMathText(question.prompt);
-  return `<article class="panel bank-item"><div class="bank-meta"><span class="badge">#${index + 1}</span><span class="badge">유형 ${Number(question.typeIndex) + 1}</span></div><p>${preview}</p><p class="muted">정답: ${formatMathText(question.answer)}</p><button class="danger" data-delete-bank="1" data-bank-key="${escapeAttr(bankKey)}" data-created-at="${escapeAttr(question.createdAt || "")}" data-prompt="${escapeAttr(question.prompt)}">삭제</button></article>`;
+  const typeNumber = Number(question.typeIndex);
+  const typeLabel = Number.isFinite(typeNumber) ? typeNumber + 1 : "-";
+  return `<article class="panel bank-item"><div class="bank-meta"><span class="badge">#${index + 1}</span><span class="badge">유형 ${typeLabel}</span></div><p>${formatMathText(question.prompt)}</p><p class="muted">정답: ${formatMathText(question.answer)}</p><button class="danger" data-delete-bank="1" data-bank-key="${escapeAttr(bankKey)}" data-created-at="${escapeAttr(question.createdAt || "")}" data-prompt="${escapeAttr(question.prompt)}">삭제</button></article>`;
 }
 
 function difficultyLabel(value) {
@@ -180,10 +244,12 @@ function difficultyLabel(value) {
 }
 
 async function exportQuestionBankFile(summaries) {
+  const bankMap = await loadQuestionBankMap();
   const banks = [];
   for (const item of summaries) {
-    const questions = await getQuestionBank(item.bankKey);
-    if (!questions.length) continue;
+    const questions = bankMap.get(item.bankKey) || [];
+    const cleaned = questions.filter((question) => isQuestionForBank(question, item.subjectId, item.grade, parseBankKey(item.bankKey).chapterId));
+    if (!cleaned.length) continue;
     banks.push({
       bankKey: item.bankKey,
       meta: parseBankKey(item.bankKey),
@@ -191,7 +257,7 @@ async function exportQuestionBankFile(summaries) {
       subjectName: item.subjectName,
       chapterTitle: item.chapterTitle,
       difficulty: item.difficulty,
-      questions,
+      questions: cleaned,
     });
   }
   const payload = {
@@ -215,7 +281,7 @@ async function exportQuestionBankFile(summaries) {
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      if (message) message.textContent = `question-bank.json 파일로 저장했습니다. dist/문제은행 폴더에 저장하면 로그인 시 자동 업로드됩니다. ${banks.length}개 묶음, ${total}개 문제`;
+      if (message) message.textContent = `question-bank.json 파일로 저장했습니다. dist/문제은행 폴더에 저장하면 로그인 때 자동으로 불러옵니다. ${banks.length}개 묶음, ${total}개 문제`;
       return;
     } catch (error) {
       if (error.name === "AbortError") {
@@ -224,6 +290,7 @@ async function exportQuestionBankFile(summaries) {
       }
     }
   }
+
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -257,6 +324,8 @@ async function importQuestionBankPayload(payload) {
         subjectId: meta.subjectId,
         grade: meta.grade,
         chapterId: meta.chapterId,
+        difficulty: meta.difficulty,
+        bankKey,
         createdAt: question.createdAt || new Date().toISOString(),
       }));
     if (!cleaned.length) continue;

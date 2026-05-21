@@ -10,16 +10,16 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="assets/icon-192.png">
   <link rel="icon" href="assets/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=20260514009">
+  <link rel="stylesheet" href="styles.css?v=20260521001">
   <script>
     window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]] }, svg: { fontCache: "global" } };
   </script>
   <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
-  <script defer src="server_config.js?v=20260514009"></script>
-  <script defer src="data.js?v=20260514009"></script>
-  <script defer src="app.js?v=20260514009"></script>
-  <script defer src="bank_override.js?v=20260514009"></script>
-  <script defer src="dashboard_override.js?v=20260514009"></script>
+  <script defer src="server_config.js?v=20260521001"></script>
+  <script defer src="data.js?v=20260521001"></script>
+  <script defer src="app.js?v=20260521001"></script>
+  <script defer src="bank_override.js?v=20260521001"></script>
+  <script defer src="dashboard_override.js?v=20260521001"></script>
 </head>
 <body>
   <main id="auth-screen" class="auth-shell">
@@ -61,6 +61,7 @@
         <button class="nav" data-view="quiz">퀴즈</button>
         <button class="nav" data-view="wrong">오답노트</button>
         <button class="nav" data-view="bank">문제은행</button>
+        <button class="nav" data-view="users">회원관리</button>
         <button class="nav" data-view="stats">학습현황</button>
       </nav>
       <button id="logout-btn" class="ghost">로그아웃</button>
@@ -137,6 +138,7 @@
 
       <section id="wrong-view" class="view hidden"></section>
       <section id="bank-view" class="view hidden"></section>
+      <section id="users-view" class="view hidden"></section>
       <section id="stats-view" class="view hidden"></section>
     </section>
   </main>
