@@ -50,7 +50,7 @@ async function renderStatsAsync() {
   const progressStats = Object.values(user.progress || {});
   const totalSolved = progressStats.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
   const correct = progressStats.reduce((sum, item) => sum + (Number(item.correct) || 0), 0);
-  const bankTotal = await getTotalBankQuestionCount();
+  const bankTotal = cachedBankQuestionTotal;
   const uniqueSolved = new Set(Object.values(user.servedBank).flat()).size;
   const savedTab = localStorage.getItem(`${STORE}:dashboardTab`) || "daily";
   const activeTab = ["daily", "weekly", "monthly", "overall"].includes(savedTab) ? savedTab : "daily";
@@ -130,6 +130,7 @@ async function renderStatsAsync() {
       switchStatsTab(button.dataset.dashboardTab);
     });
   });
+  refreshStatsBankTotal();
   renderMath();
 }
 
@@ -156,7 +157,30 @@ function switchStatsTab(tab) {
       context.correct
     );
   }
-  renderMath();
+  if (activeTab === "overall" && context.bankTotal === null) {
+    refreshStatsBankTotal();
+  }
+}
+
+async function refreshStatsBankTotal() {
+  const context = window.__edudashStatsContext;
+  if (!context) return;
+  const total = await getTotalBankQuestionCount();
+  context.bankTotal = total;
+  const activeTab = localStorage.getItem(`${STORE}:dashboardTab`) || "daily";
+  if (state.view === "stats" && activeTab === "overall") {
+    const content = $("#stats-view .tab-content");
+    if (content) {
+      content.innerHTML = dashboardTabContent(
+        "overall",
+        context.logs,
+        context.bankTotal,
+        context.uniqueSolved,
+        context.totalSolved,
+        context.correct
+      );
+    }
+  }
 }
 
 function todayQuestionCard(item, index) {
@@ -351,6 +375,17 @@ async function renderDashboardAsync() {
 
 function dashboardTabContent(tab, logs, bankTotal, uniqueSolved, totalSolved, correct) {
   if (tab === "overall") {
+    if (bankTotal === null || bankTotal === undefined) {
+      return `
+        <div class="grid compact-grid">
+          <div class="stat">문제은행 전체<strong>계산 중</strong></div>
+          <div class="stat">학습한 문제<strong>${uniqueSolved}</strong></div>
+          <div class="stat">남은 문제<strong>-</strong></div>
+          <div class="stat">진행률<strong>-</strong></div>
+        </div>
+        <p class="muted">문제은행 수량을 불러오는 중입니다. 다른 탭은 바로 확인할 수 있습니다.</p>
+      `;
+    }
     const remaining = Math.max(0, bankTotal - uniqueSolved);
     const rate = bankTotal ? Math.round((Math.min(uniqueSolved, bankTotal) / bankTotal) * 100) : 0;
     return `
