@@ -3,7 +3,7 @@ const BANK_LIMIT = 100;
 const BANK_DB_NAME = "EduDashQuestionBank";
 const BANK_DB_VERSION = 1;
 const BANK_STORE = "chapterBanks";
-const APP_BUILD = "2026-05-21-001";
+const APP_BUILD = "2026-05-21-002";
 const BANK_ADMIN_USER = "u9313050";
 const SUBJECT_FILES = ["db_korean.json", "db_math.json", "db_science.json"];
 const AUTO_BANK_FOLDER = "문제은행/";
@@ -445,6 +445,14 @@ function serverSignupFunctionUrl() {
   return serverConfig().signupFunctionUrl || serverUrl("/functions/v1/create-user");
 }
 
+function serverSignupFunctionUrls() {
+  return [
+    serverConfig().signupFunctionUrl,
+    serverUrl("/functions/v1/super-api"),
+    serverUrl("/functions/v1/create-user")
+  ].filter(Boolean).filter((url, index, urls) => urls.indexOf(url) === index);
+}
+
 function serverAuthHeaders(extra = {}) {
   const key = serverConfig().anonKey;
   return {
@@ -522,28 +530,32 @@ async function writeServerSession(username, authData, password = "") {
 }
 
 async function supabaseSignUp(username, password) {
-  let response;
-  try {
-    response = await fetch(serverSignupFunctionUrl(), {
-      method: "POST",
-      headers: serverAuthHeaders(),
-      body: JSON.stringify({
-        username,
-        email: serverEmail(username),
-        password
-      })
-    });
-  } catch {
-    throw new Error("회원가입 서버 함수(create-user)가 아직 배포되지 않았거나 접근할 수 없습니다.");
-  }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = data.msg || data.message || "서버 회원가입에 실패했습니다.";
+  let lastError = "";
+  for (const url of serverSignupFunctionUrls()) {
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: serverAuthHeaders(),
+        body: JSON.stringify({
+          action: "createUser",
+          username,
+          email: serverEmail(username),
+          password
+        })
+      });
+    } catch {
+      lastError = `${url}에 연결할 수 없습니다.`;
+      continue;
+    }
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return data;
+    const message = data.msg || data.message || `서버 회원가입에 실패했습니다. HTTP ${response.status}`;
     if (/already|registered|exists/i.test(message)) throw new Error("이미 가입된 사용자입니다.");
     if (/email.*rate.*limit|rate.*limit/i.test(message)) throw new Error("요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.");
-    throw new Error(message);
+    lastError = message;
   }
-  return data;
+  throw new Error(lastError || "회원가입 서버 함수에 연결할 수 없습니다. Supabase Edge Function super-api 배포 상태를 확인해 주세요.");
 }
 
 async function supabaseSignIn(username, password) {
